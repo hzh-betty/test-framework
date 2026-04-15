@@ -61,3 +61,21 @@ def test_build_suite_result_from_merged_cases_counts_pass_and_fail():
     assert suite_result.passed_cases == 1
     assert suite_result.failed_cases == 1
     assert [case.name for case in suite_result.case_results] == ["Login", "Checkout"]
+
+
+def test_build_suite_result_from_merged_cases_rejects_non_bool_case_passed():
+    with pytest.raises(ValueError, match='case "passed" must be a bool'):
+        build_suite_result_from_merged_cases([{"name": "Login", "passed": "true"}])
+
+
+def test_build_suite_result_from_merged_cases_rejects_non_bool_step_passed():
+    with pytest.raises(ValueError, match='step "passed" must be a bool'):
+        build_suite_result_from_merged_cases(
+            [
+                {
+                    "name": "Login",
+                    "passed": True,
+                    "step_results": [{"action": "click", "target": "#submit", "passed": 1}],
+                }
+            ]
+        )

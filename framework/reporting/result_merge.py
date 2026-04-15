@@ -72,9 +72,12 @@ def _to_case_result(case: dict) -> CaseExecutionResult:
     step_results = case.get("step_results") or []
     if not isinstance(step_results, list):
         raise ValueError('case "step_results" must be a list when provided')
+    passed = case.get("passed")
+    if not isinstance(passed, bool):
+        raise ValueError(f'case "passed" must be a bool, got {type(passed).__name__}')
     return CaseExecutionResult(
         name=case["name"],
-        passed=bool(case.get("passed")),
+        passed=passed,
         step_results=[_to_step_result(step) for step in step_results],
         error_message=case.get("error_message"),
     )
@@ -87,9 +90,12 @@ def _to_step_result(step: dict) -> StepExecutionResult:
     target = step.get("target")
     if not isinstance(action, str) or not isinstance(target, str):
         raise ValueError("step result must include string action and target")
+    passed = step.get("passed")
+    if not isinstance(passed, bool):
+        raise ValueError(f'step "passed" must be a bool, got {type(passed).__name__}')
     return StepExecutionResult(
         action=action,
         target=target,
-        passed=bool(step.get("passed")),
+        passed=passed,
         error_message=step.get("error_message"),
     )

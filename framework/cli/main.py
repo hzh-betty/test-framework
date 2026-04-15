@@ -156,6 +156,8 @@ def main(
     args = parser.parse_args(argv)
     if not args.dsl_path and not args.merge_results:
         parser.error("dsl_path is required unless --merge-results is provided.")
+    if args.dsl_path and args.merge_results:
+        parser.error("dsl_path cannot be used with --merge-results.")
     dependencies = dependencies or _default_dependencies()
     config = load_runtime_config(args.config)
 

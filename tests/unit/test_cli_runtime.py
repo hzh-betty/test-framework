@@ -107,6 +107,39 @@ class TestCliRuntime(unittest.TestCase):
 
         self.assertEqual(rc, 0)
 
+    def test_main_rejects_dsl_path_with_merge_results(self):
+        logger = FakeLogger()
+        deps = RuntimeDependencies(
+            driver_manager_factory=lambda: (_ for _ in ()).throw(
+                AssertionError("driver manager must not be created when args are invalid")
+            ),
+            actions_factory=lambda _driver: (_ for _ in ()).throw(
+                AssertionError("actions must not be created when args are invalid")
+            ),
+            executor_factory=lambda _actions, _logger: (_ for _ in ()).throw(
+                AssertionError("executor must not be created when args are invalid")
+            ),
+            reporter_factory=lambda _results_dir: FakeReporter(),
+            logger_factory=lambda _level, _file: logger,
+            email_notifier_factory=lambda _config: FakeNotifier(),
+            dingtalk_notifier_factory=lambda _webhook: FakeNotifier(),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            dsl_file = tmpdir_path / "case.xml"
+            dsl_file.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+""",
+                encoding="utf-8",
+            )
+            merged_file = tmpdir_path / "merged.json"
+            write_case_results(merged_file, [{"name": "Login", "passed": True}])
+
+            with self.assertRaises(SystemExit):
+                main([str(dsl_file), "--merge-results", str(merged_file)], dependencies=deps)
+
     def test_main_passes_execution_control_options_to_executor(self):
         driver_manager = FakeDriverManager()
         logger = FakeLogger()
