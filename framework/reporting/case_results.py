@@ -18,9 +18,14 @@ def read_case_results(path: Path) -> list[dict]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("case-results payload must be a JSON object")
-    cases = payload.get("cases", [])
+    if "cases" not in payload:
+        raise ValueError('case-results payload is missing required "cases" key')
+    cases = payload["cases"]
     if not isinstance(cases, list):
         raise ValueError("cases must be a list")
+    for index, case in enumerate(cases):
+        if not isinstance(case, dict):
+            raise ValueError(f"case item at index {index} must be an object")
     return cases
 
 

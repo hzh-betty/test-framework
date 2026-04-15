@@ -50,3 +50,19 @@ def test_read_case_results_rejects_non_list_cases(tmp_path: Path):
 
     with pytest.raises(ValueError, match="cases must be a list"):
         read_case_results(path)
+
+
+def test_read_failed_case_names_rejects_missing_cases_key(tmp_path: Path):
+    path = tmp_path / "case-results.json"
+    path.write_text('{"foo": []}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match='missing required "cases" key'):
+        read_failed_case_names(path)
+
+
+def test_read_failed_case_names_rejects_non_object_case_items(tmp_path: Path):
+    path = tmp_path / "case-results.json"
+    path.write_text('{"cases": ["bad"]}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="case item at index 0 must be an object"):
+        read_failed_case_names(path)
