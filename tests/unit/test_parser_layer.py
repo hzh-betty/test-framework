@@ -63,11 +63,17 @@ class TestParserLayer(unittest.TestCase):
         self.assertEqual(suite.cases[0].tags, ["smoke", "login", "critical"])
 
     def test_yaml_parser_raises_on_unknown_field_fixture(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"invalid_unknown_field\.yaml \$\.cases\[0\]\.unexpected: unknown key",
+        ):
             YamlCaseParser().parse(FIXTURES / "invalid_unknown_field.yaml")
 
     def test_json_parser_raises_on_type_mismatch_fixture(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"invalid_type\.json \$\.cases\[0\]\.steps\[0\]\.target: expected a string",
+        ):
             JsonCaseParser().parse(FIXTURES / "invalid_type.json")
 
     def test_yaml_parser_raises_on_syntax_error_with_file_context(self):
@@ -77,7 +83,9 @@ class TestParserLayer(unittest.TestCase):
 
     def test_yaml_parser_raises_when_root_is_not_mapping(self):
         case_file = FIXTURES / "invalid_root_sequence.yaml"
-        with self.assertRaisesRegex(ValueError, r"dsl \$: expected a mapping"):
+        with self.assertRaisesRegex(
+            ValueError, r"invalid_root_sequence\.yaml \$: expected a mapping"
+        ):
             YamlCaseParser().parse(case_file)
 
     def test_xml_parser_raises_on_invalid_xml(self):

@@ -19,6 +19,6 @@ class JsonCaseParser:
             raise ValueError(f"{path}: invalid JSON syntax: {exc}") from exc
 
         if not isinstance(payload, Mapping):
-            raise ValueError("dsl $: expected a mapping")
+            raise ValueError(f"{path} $: expected a mapping")
 
-        return build_suite_from_mapping(payload, source="dsl")
+        return build_suite_from_mapping(payload, source=str(path))
