@@ -26,6 +26,10 @@ class TestParserLayer(unittest.TestCase):
         suite = XmlCaseParser().parse(FIXTURES / "valid_case_with_tags.xml")
         self.assertEqual(suite.cases[0].tags, ["smoke", "login"])
 
+    def test_xml_parser_normalizes_case_tags_with_whitespace_and_empty_values(self):
+        suite = XmlCaseParser().parse(FIXTURES / "valid_case_with_tags_normalization.xml")
+        self.assertEqual(suite.cases[0].tags, ["smoke", "login", "critical"])
+
     def test_xml_parser_raises_on_invalid_xml(self):
         with self.assertRaises(ValueError):
             XmlCaseParser().parse(FIXTURES / "invalid_case.xml")
