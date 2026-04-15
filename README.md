@@ -5,7 +5,7 @@
 ## 架构分层
 
 ```text
-├── DSL层（XML / YAML / JSON，V1先实现XML）
+├── DSL层（XML / YAML / JSON）
 ├── 解析层（Parser）
 ├── 执行引擎（Executor）
 ├── Selenium封装层
@@ -36,7 +36,7 @@ uv run webtest-framework examples/cases/login.xml --config examples/config/runti
 
 ## CLI 参数（核心）
 
-- `dsl_path`：DSL 用例文件路径（V1 为 XML）
+- `dsl_path`：DSL 用例文件路径（支持 XML / YAML / JSON）
 - `--config`：运行配置文件（YAML）
 - `--browser`：`chrome` / `firefox` / `edge`
 - `--headless`：无头模式
@@ -67,6 +67,33 @@ uv run webtest-framework examples/cases/login.xml --include-tag-expr regression 
 
 # 结果合并（后者覆盖前者）
 uv run webtest-framework --merge-results artifacts/first.json,artifacts/second.json
+```
+
+## DSL 示例
+
+YAML：
+
+```yaml
+name: login-smoke
+steps:
+  - open: https://example.com/login
+  - type: { selector: "#username", text: "demo" }
+  - type: { selector: "#password", text: "secret" }
+  - click: { selector: "button[type=submit]" }
+```
+
+JSON：
+
+```json
+{
+  "name": "login-smoke",
+  "steps": [
+    { "open": "https://example.com/login" },
+    { "type": { "selector": "#username", "text": "demo" } },
+    { "type": { "selector": "#password", "text": "secret" } },
+    { "click": { "selector": "button[type=submit]" } }
+  ]
+}
 ```
 
 ## 目录结构
