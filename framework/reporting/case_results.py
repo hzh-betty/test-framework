@@ -31,7 +31,15 @@ def read_case_results(path: Path) -> list[dict]:
 
 def read_failed_case_names(path: Path) -> set[str]:
     failed_names: set[str] = set()
-    for case in read_case_results(path):
-        if case.get("passed") is False and isinstance(case.get("name"), str):
+    for index, case in enumerate(read_case_results(path)):
+        if "name" not in case:
+            raise ValueError(f"case item at index {index} is missing required string 'name'")
+        if not isinstance(case["name"], str):
+            raise ValueError(f"case item at index {index} must have string 'name'")
+        if "passed" not in case:
+            raise ValueError(f"case item at index {index} is missing required bool 'passed'")
+        if not isinstance(case["passed"], bool):
+            raise ValueError(f"case item at index {index} must have bool 'passed'")
+        if case["passed"] is False:
             failed_names.add(case["name"])
     return failed_names

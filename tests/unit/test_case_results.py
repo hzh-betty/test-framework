@@ -66,3 +66,22 @@ def test_read_failed_case_names_rejects_non_object_case_items(tmp_path: Path):
 
     with pytest.raises(ValueError, match="case item at index 0 must be an object"):
         read_failed_case_names(path)
+
+
+@pytest.mark.parametrize(
+    ("cases", "expected_error"),
+    [
+        ([{"passed": False}], "case item at index 0 is missing required string 'name'"),
+        ([{"name": 42, "passed": False}], "case item at index 0 must have string 'name'"),
+        ([{"name": "Login"}], "case item at index 0 is missing required bool 'passed'"),
+        ([{"name": "Login", "passed": "no"}], "case item at index 0 must have bool 'passed'"),
+    ],
+)
+def test_read_failed_case_names_rejects_invalid_case_schema(
+    tmp_path: Path, cases: list[dict], expected_error: str
+):
+    path = tmp_path / "case-results.json"
+    write_case_results(path, cases)
+
+    with pytest.raises(ValueError, match=expected_error):
+        read_failed_case_names(path)
