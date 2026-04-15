@@ -1,15 +1,10 @@
 import unittest
-import importlib.util
 from pathlib import Path
 
 from framework.parser import get_parser
+from framework.parser.json_parser import JsonCaseParser
 from framework.parser.xml_parser import XmlCaseParser
 from framework.parser.yaml_parser import YamlCaseParser
-
-if importlib.util.find_spec("framework.parser.json_parser") is None:
-    JsonCaseParser = None
-else:
-    from framework.parser.json_parser import JsonCaseParser
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "dsl"
@@ -24,16 +19,7 @@ class TestParserLayer(unittest.TestCase):
         parser = get_parser("cases/login.yaml")
         self.assertIsInstance(parser, YamlCaseParser)
 
-    def test_get_parser_json_not_implemented_message_matches_task3_support(self):
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            r"Supported formats: XML, YAML\.$",
-        ):
-            get_parser("cases/login.json")
-
     def test_get_parser_returns_json_parser_for_json_file(self):
-        if JsonCaseParser is None:
-            self.skipTest("JsonCaseParser not available until Task4")
         parser = get_parser("cases/login.json")
         self.assertIsInstance(parser, JsonCaseParser)
 
@@ -58,8 +44,6 @@ class TestParserLayer(unittest.TestCase):
         self.assertEqual(case.steps[0].target, "https://example.test/login")
 
     def test_json_parser_parses_suite_case_steps_and_tags(self):
-        if JsonCaseParser is None:
-            self.skipTest("JsonCaseParser not available until Task4")
         suite = JsonCaseParser().parse(FIXTURES / "valid_case.json")
         self.assertEqual(suite.name, "SmokeSuite")
         self.assertEqual(len(suite.cases), 1)
@@ -83,8 +67,6 @@ class TestParserLayer(unittest.TestCase):
             YamlCaseParser().parse(FIXTURES / "invalid_unknown_field.yaml")
 
     def test_json_parser_raises_on_type_mismatch_fixture(self):
-        if JsonCaseParser is None:
-            self.skipTest("JsonCaseParser not available until Task4")
         with self.assertRaises(ValueError):
             JsonCaseParser().parse(FIXTURES / "invalid_type.json")
 
