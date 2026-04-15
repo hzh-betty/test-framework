@@ -1,14 +1,15 @@
 import unittest
+import importlib.util
 from pathlib import Path
 
 from framework.parser import get_parser
 from framework.parser.xml_parser import XmlCaseParser
 from framework.parser.yaml_parser import YamlCaseParser
 
-try:
-    from framework.parser.json_parser import JsonCaseParser
-except ModuleNotFoundError:  # Task4
+if importlib.util.find_spec("framework.parser.json_parser") is None:
     JsonCaseParser = None
+else:
+    from framework.parser.json_parser import JsonCaseParser
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "dsl"
