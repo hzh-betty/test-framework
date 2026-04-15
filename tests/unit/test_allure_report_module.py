@@ -65,6 +65,46 @@ class TestAllureReportModule(unittest.TestCase):
             result_files = list((Path(tmpdir) / "allure-results").glob("*-result.json"))
             self.assertEqual(len(result_files), 2)
 
+    def test_write_suite_result_contains_steps_and_attachments(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reporter = AllureReporter(results_dir=Path(tmpdir) / "allure-results")
+            suite_result = SuiteExecutionResult(
+                name="Smoke",
+                total_cases=1,
+                passed_cases=0,
+                failed_cases=1,
+                case_results=[
+                    CaseExecutionResult(
+                        name="Login",
+                        passed=False,
+                        step_results=[
+                            StepExecutionResult(
+                                action="assert_text",
+                                target="id=welcome",
+                                passed=False,
+                                error_message="mismatch",
+                            )
+                        ],
+                        error_message="mismatch",
+                    )
+                ],
+            )
+            context = ReportContext(
+                browser="chrome",
+                headless=True,
+                python_version="3.12.3",
+                framework_version="0.1.0",
+                runtime_log_path="artifacts/runtime.log",
+                dsl_path="examples/cases/login.xml",
+            )
+
+            reporter.write_suite_result(suite_result, context=context)
+            files = list((Path(tmpdir) / "allure-results").glob("*-result.json"))
+            payload = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(payload["steps"][0]["name"], "assert_text id=welcome")
+            self.assertEqual(payload["steps"][0]["status"], "failed")
+            self.assertIn("attachments", payload)
+
     def test_generate_html_report_uses_allure_cli(self):
         calls: list[list[str]] = []
 
