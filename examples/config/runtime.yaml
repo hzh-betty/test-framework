@@ -1,0 +1,16 @@
+browser: chrome
+headless: true
+implicit_wait: 10
+log_level: INFO
+
+smtp:
+  host: smtp.example.com
+  port: 465
+  username: bot@example.com
+  password: your-password
+  sender: bot@example.com
+  receivers:
+    - qa@example.com
+  use_ssl: true
+
+dingtalk_webhook: https://oapi.dingtalk.com/robot/send?access_token=your-token

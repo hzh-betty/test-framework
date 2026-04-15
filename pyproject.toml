@@ -1,0 +1,27 @@
+[project]
+name = "web-automation-framework"
+version = "0.1.0"
+description = "Layered web automation framework built on Selenium"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "selenium>=4.20.0",
+    "PyYAML>=6.0.1",
+    "allure-python-commons>=2.13.5",
+    "xmlschema>=3.4.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2.0",
+]
+
+[project.scripts]
+webtest-framework = "framework.cli.main:entrypoint"
+
+[build-system]
+requires = ["hatchling>=1.24.2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["framework"]
