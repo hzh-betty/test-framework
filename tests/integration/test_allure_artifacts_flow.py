@@ -23,7 +23,7 @@ class FakeExecutor:
     def __init__(self, suite_result: SuiteExecutionResult):
         self.suite_result = suite_result
 
-    def run_file(self, _dsl_path: str):
+    def run_file(self, _dsl_path: str, **_kwargs):
         return self.suite_result
 
 

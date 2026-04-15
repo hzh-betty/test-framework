@@ -102,6 +102,64 @@ class TestExecutorEngine(unittest.TestCase):
         self.assertEqual(result.failed_cases, 1)
         self.assertIn("Unsupported action", result.case_results[0].error_message)
 
+    def test_run_suite_fails_when_filtered_empty_and_not_allowed(self):
+        calls: list[tuple] = []
+        suite = SuiteSpec(
+            name="Smoke",
+            cases=[
+                CaseSpec(
+                    name="Login",
+                    tags=["smoke"],
+                    steps=[StepSpec(action="open", target="https://example.test")],
+                )
+            ],
+        )
+        executor = Executor(page_factory=lambda: FakePage(calls))
+
+        with self.assertRaisesRegex(
+            ValueError, "Suite contains no runnable cases after filtering."
+        ):
+            executor.run_suite(
+                suite,
+                include_tag_expr="regression",
+                run_empty_suite=False,
+            )
+
+    def test_run_suite_succeeds_when_filtered_empty_and_allowed(self):
+        calls: list[tuple] = []
+        suite = SuiteSpec(
+            name="Smoke",
+            cases=[
+                CaseSpec(
+                    name="Login",
+                    tags=["smoke"],
+                    steps=[StepSpec(action="open", target="https://example.test")],
+                )
+            ],
+        )
+        executor = Executor(page_factory=lambda: FakePage(calls))
+
+        result = executor.run_suite(
+            suite,
+            include_tag_expr="regression",
+            run_empty_suite=True,
+        )
+
+        self.assertEqual(result.total_cases, 0)
+        self.assertEqual(result.passed_cases, 0)
+        self.assertEqual(result.failed_cases, 0)
+        self.assertEqual(result.case_results, [])
+
+    def test_run_suite_raises_for_empty_tag_expression(self):
+        suite = SuiteSpec(
+            name="Smoke",
+            cases=[CaseSpec(name="Login", tags=["smoke"], steps=[])],
+        )
+        executor = Executor(page_factory=lambda: FakePage([]))
+
+        with self.assertRaisesRegex(ValueError, "Tag expression is empty"):
+            executor.run_suite(suite, include_tag_expr="")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,8 +25,8 @@ class FakeExecutor:
         self.suite_result = suite_result
         self.run_file_calls = []
 
-    def run_file(self, dsl_path: str):
-        self.run_file_calls.append(dsl_path)
+    def run_file(self, dsl_path: str, **kwargs):
+        self.run_file_calls.append((dsl_path, kwargs))
         return self.suite_result
 
 
@@ -69,6 +69,64 @@ class FakeLogger:
 
 
 class TestCliRuntime(unittest.TestCase):
+    def test_main_passes_execution_control_options_to_executor(self):
+        driver_manager = FakeDriverManager()
+        logger = FakeLogger()
+        executor = FakeExecutor(
+            SuiteExecutionResult(
+                name="Smoke",
+                total_cases=1,
+                passed_cases=1,
+                failed_cases=0,
+                case_results=[],
+            )
+        )
+        deps = RuntimeDependencies(
+            driver_manager_factory=lambda: driver_manager,
+            actions_factory=lambda _driver: object(),
+            executor_factory=lambda _actions, _logger: executor,
+            reporter_factory=lambda _results_dir: FakeReporter(),
+            logger_factory=lambda _level, _file: logger,
+            email_notifier_factory=lambda _config: FakeNotifier(),
+            dingtalk_notifier_factory=lambda _webhook: FakeNotifier(),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xml_file = Path(tmpdir) / "case.xml"
+            xml_file.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+""",
+                encoding="utf-8",
+            )
+            rc = main(
+                [
+                    str(xml_file),
+                    "--include-tag-expr",
+                    "smoke",
+                    "--exclude-tag-expr",
+                    "flaky",
+                    "--run-empty-suite",
+                ],
+                dependencies=deps,
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            executor.run_file_calls,
+            [
+                (
+                    str(xml_file),
+                    {
+                        "include_tag_expr": "smoke",
+                        "exclude_tag_expr": "flaky",
+                        "run_empty_suite": True,
+                        "allowed_case_names": None,
+                    },
+                )
+            ],
+        )
+
     def test_main_passes_report_context_to_reporter(self):
         driver_manager = FakeDriverManager()
         logger = FakeLogger()

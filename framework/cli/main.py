@@ -107,6 +107,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Send execution summary to DingTalk webhook in config file.",
     )
+    parser.add_argument(
+        "--include-tag-expr",
+        default=None,
+        help="Include only cases whose tags match this expression.",
+    )
+    parser.add_argument(
+        "--exclude-tag-expr",
+        default=None,
+        help="Exclude cases whose tags match this expression.",
+    )
+    parser.add_argument(
+        "--run-empty-suite",
+        action="store_true",
+        help="Treat empty suite after filtering as success instead of error.",
+    )
     return parser
 
 
@@ -140,7 +155,13 @@ def main(
     try:
         actions = dependencies.actions_factory(driver)
         executor = dependencies.executor_factory(actions, logger)
-        suite_result = executor.run_file(args.dsl_path)
+        suite_result = executor.run_file(
+            args.dsl_path,
+            include_tag_expr=args.include_tag_expr,
+            exclude_tag_expr=args.exclude_tag_expr,
+            run_empty_suite=args.run_empty_suite,
+            allowed_case_names=None,
+        )
         _handle_reporting(args, suite_result, dependencies, logger, report_context)
         _handle_notifications(args, suite_result, config, dependencies)
     finally:

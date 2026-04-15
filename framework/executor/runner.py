@@ -9,6 +9,7 @@ from framework.logging.runtime_logger import FailureContext
 from framework.page_objects.base_page import BasePage
 from framework.parser import get_parser
 
+from .execution_control import select_cases
 from .models import CaseExecutionResult, StepExecutionResult, SuiteExecutionResult
 
 
@@ -21,17 +22,46 @@ class Executor:
     logger: object | None = None
     screenshot_dir: str = "artifacts/screenshots"
 
-    def run_file(self, dsl_path: str | Path) -> SuiteExecutionResult:
+    def run_file(
+        self,
+        dsl_path: str | Path,
+        include_tag_expr: str | None = None,
+        exclude_tag_expr: str | None = None,
+        run_empty_suite: bool = False,
+        allowed_case_names: set[str] | None = None,
+    ) -> SuiteExecutionResult:
         parser = get_parser(dsl_path)
         suite = parser.parse(dsl_path)
-        return self.run_suite(suite)
+        return self.run_suite(
+            suite,
+            include_tag_expr=include_tag_expr,
+            exclude_tag_expr=exclude_tag_expr,
+            run_empty_suite=run_empty_suite,
+            allowed_case_names=allowed_case_names,
+        )
 
-    def run_suite(self, suite: SuiteSpec) -> SuiteExecutionResult:
+    def run_suite(
+        self,
+        suite: SuiteSpec,
+        include_tag_expr: str | None = None,
+        exclude_tag_expr: str | None = None,
+        run_empty_suite: bool = False,
+        allowed_case_names: set[str] | None = None,
+    ) -> SuiteExecutionResult:
+        selected_cases = select_cases(
+            suite.cases,
+            include_expr=include_tag_expr,
+            exclude_expr=exclude_tag_expr,
+            allowed_case_names=allowed_case_names,
+        )
+        if not selected_cases and not run_empty_suite:
+            raise ValueError("Suite contains no runnable cases after filtering.")
+
         case_results: list[CaseExecutionResult] = []
         passed = 0
         failed = 0
 
-        for case in suite.cases:
+        for case in selected_cases:
             result = self._run_case(case)
             case_results.append(result)
             if result.passed:
@@ -41,7 +71,7 @@ class Executor:
 
         return SuiteExecutionResult(
             name=suite.name,
-            total_cases=len(suite.cases),
+            total_cases=len(selected_cases),
             passed_cases=passed,
             failed_cases=failed,
             case_results=case_results,
