@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import platform
+from pathlib import Path
 from typing import Callable, Sequence
 
 from framework import __version__
@@ -15,6 +16,7 @@ from framework.notify import DingTalkNotifier, EmailNotifier, SmtpConfig
 from framework.page_objects.base_page import BasePage
 from framework.parser import get_parser
 from framework.reporting import AllureReporter, ReportContext
+from framework.reporting.case_results import read_failed_case_names, write_case_results
 from framework.selenium import DriverConfig, DriverManager, SeleniumActions
 
 
@@ -125,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Treat empty suite after filtering as success instead of error.",
     )
+    parser.add_argument(
+        "--rerunfailed",
+        default=None,
+        help="Path to case-results.json; rerun only failed cases from that file.",
+    )
     return parser
 
 
@@ -143,6 +150,9 @@ def main(
     log_level = config.get("log_level", args.log_level)
 
     logger = dependencies.logger_factory(log_level, args.log_file)
+    allowed_case_names = (
+        read_failed_case_names(Path(args.rerunfailed)) if args.rerunfailed else None
+    )
     report_context = ReportContext(
         browser=browser,
         headless=headless,
@@ -156,7 +166,7 @@ def main(
         suite.cases,
         include_expr=args.include_tag_expr,
         exclude_expr=args.exclude_tag_expr,
-        allowed_case_names=None,
+        allowed_case_names=allowed_case_names,
     )
     if not selected_cases:
         if not args.run_empty_suite:
@@ -168,6 +178,7 @@ def main(
             failed_cases=0,
             case_results=[],
         )
+        _write_suite_case_results(suite_result)
         _handle_reporting(args, suite_result, dependencies, logger, report_context)
         _handle_notifications(args, suite_result, config, dependencies)
         return 0
@@ -184,14 +195,20 @@ def main(
             include_tag_expr=args.include_tag_expr,
             exclude_tag_expr=args.exclude_tag_expr,
             run_empty_suite=args.run_empty_suite,
-            allowed_case_names=None,
+            allowed_case_names=allowed_case_names,
         )
+        _write_suite_case_results(suite_result)
         _handle_reporting(args, suite_result, dependencies, logger, report_context)
         _handle_notifications(args, suite_result, config, dependencies)
     finally:
         driver_manager.quit_driver(driver)
 
     return 0 if suite_result.failed_cases == 0 else 1
+
+
+def _write_suite_case_results(suite_result: SuiteExecutionResult) -> None:
+    cases = [asdict(case_result) for case_result in suite_result.case_results]
+    write_case_results(Path("artifacts/case-results.json"), cases)
 
 
 def _handle_reporting(
