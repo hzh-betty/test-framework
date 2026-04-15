@@ -45,6 +45,30 @@ uv run webtest-framework examples/cases/login.xml --config examples/config/runti
 - `--notify-email`：发送邮件通知（需配置 `smtp`）
 - `--notify-dingtalk`：发送钉钉通知（需配置 `dingtalk_webhook`）
 
+## 执行控制增强（Execution Control）
+
+- `--include-tag-expr "<expr>"`：仅执行匹配标签表达式的 case（支持 `AND` / `OR` / `NOT` / 括号）。
+- `--exclude-tag-expr "<expr>"`：排除匹配标签表达式的 case。
+- `--rerunfailed <case-results.json>`：从历史结果中读取失败 case 名称，仅重跑失败用例。
+- `--run-empty-suite`：当筛选后无可执行 case 时，按成功退出并产出空 `case-results.json`。
+- `--merge-results <file1,file2[,fileN]>`：合并多个 case 结果文件；同名 case 以后输入覆盖前者。
+
+示例：
+
+```bash
+# 标签表达式过滤
+uv run webtest-framework examples/cases/login.xml --include-tag-expr "smoke AND NOT flaky"
+
+# 失败重跑（可与标签过滤组合）
+uv run webtest-framework examples/cases/login.xml --rerunfailed artifacts/case-results.json --exclude-tag-expr flaky
+
+# 空套件按成功处理
+uv run webtest-framework examples/cases/login.xml --include-tag-expr regression --run-empty-suite
+
+# 结果合并（后者覆盖前者）
+uv run webtest-framework --merge-results artifacts/first.json,artifacts/second.json
+```
+
 ## 目录结构
 
 ```text
