@@ -16,7 +16,7 @@ def get_parser(case_file: str | Path) -> DslParser:
     if dsl_format is DslFormat.YAML:
         return YamlCaseParser()
     raise NotImplementedError(
-        f"Parser for '{dsl_format.value}' is not implemented in V1. Supported formats: XML, YAML, JSON."
+        f"Parser for '{dsl_format.value}' is not implemented in V1. Supported formats: XML, YAML."
     )
 
 

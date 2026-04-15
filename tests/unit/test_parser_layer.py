@@ -24,6 +24,13 @@ class TestParserLayer(unittest.TestCase):
         parser = get_parser("cases/login.yaml")
         self.assertIsInstance(parser, YamlCaseParser)
 
+    def test_get_parser_json_not_implemented_message_matches_task3_support(self):
+        with self.assertRaisesRegex(
+            NotImplementedError,
+            r"Supported formats: XML, YAML\.$",
+        ):
+            get_parser("cases/login.json")
+
     def test_get_parser_returns_json_parser_for_json_file(self):
         if JsonCaseParser is None:
             self.skipTest("JsonCaseParser not available until Task4")
