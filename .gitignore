@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.Zone.Identifier
+robotframework-master/
+artifacts/
+.pytest_cache/
+.coverage
+htmlcov/
+.worktrees/
