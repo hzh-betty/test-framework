@@ -74,24 +74,39 @@ uv run webtest-framework --merge-results artifacts/first.json,artifacts/second.j
 YAML：
 
 ```yaml
-name: login-smoke
-steps:
-  - open: https://example.com/login
-  - type: { selector: "#username", text: "demo" }
-  - type: { selector: "#password", text: "secret" }
-  - click: { selector: "button[type=submit]" }
+name: sample-suite
+cases:
+  - name: login-smoke
+    tags: [smoke, auth]
+    steps:
+      - action: open
+        target: https://example.com/login
+      - action: type
+        target: css=#username
+        value: demo
+      - action: type
+        target: css=#password
+        value: secret
+      - action: click
+        target: css=button[type=submit]
 ```
 
 JSON：
 
 ```json
 {
-  "name": "login-smoke",
-  "steps": [
-    { "open": "https://example.com/login" },
-    { "type": { "selector": "#username", "text": "demo" } },
-    { "type": { "selector": "#password", "text": "secret" } },
-    { "click": { "selector": "button[type=submit]" } }
+  "name": "sample-suite",
+  "cases": [
+    {
+      "name": "login-smoke",
+      "tags": ["smoke", "auth"],
+      "steps": [
+        { "action": "open", "target": "https://example.com/login" },
+        { "action": "type", "target": "css=#username", "value": "demo" },
+        { "action": "type", "target": "css=#password", "value": "secret" },
+        { "action": "click", "target": "css=button[type=submit]" }
+      ]
+    }
   ]
 }
 ```
