@@ -1,0 +1,15 @@
+{
+  "name": "SmokeSuite",
+  "cases": [
+    {
+      "name": "Login success",
+      "tags": ["smoke", "login"],
+      "steps": [
+        {"action": "open", "target": "https://example.test/login"},
+        {"action": "type", "target": "id=username", "value": "demo"},
+        {"action": "type", "target": "id=password", "value": "mode"},
+        {"action": "click", "target": "id=submit"}
+      ]
+    }
+  ]
+}

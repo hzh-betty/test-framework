@@ -1,0 +1,8 @@
+name: SmokeSuite
+cases:
+  - name: Login success
+    tags: smoke,login
+    unexpected: true
+    steps:
+      - action: open
+        target: https://example.test/login
