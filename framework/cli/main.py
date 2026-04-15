@@ -1,0 +1,215 @@
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+import platform
+from typing import Callable, Sequence
+
+from framework import __version__
+from framework.core import load_runtime_config
+from framework.executor import Executor, SuiteExecutionResult
+from framework.logging import configure_runtime_logger
+from framework.notify import DingTalkNotifier, EmailNotifier, SmtpConfig
+from framework.page_objects.base_page import BasePage
+from framework.reporting import AllureReporter, ReportContext
+from framework.selenium import DriverConfig, DriverManager, SeleniumActions
+
+
+@dataclass(frozen=True)
+class RuntimeDependencies:
+    driver_manager_factory: Callable[[], DriverManager]
+    actions_factory: Callable[[object], SeleniumActions]
+    executor_factory: Callable[[SeleniumActions, object], Executor]
+    reporter_factory: Callable[[str], AllureReporter]
+    logger_factory: Callable[[str, str], object]
+    email_notifier_factory: Callable[[SmtpConfig], EmailNotifier]
+    dingtalk_notifier_factory: Callable[[str], DingTalkNotifier]
+
+
+def _default_dependencies() -> RuntimeDependencies:
+    return RuntimeDependencies(
+        driver_manager_factory=lambda: DriverManager(),
+        actions_factory=lambda driver: SeleniumActions(driver=driver),
+        executor_factory=lambda actions, logger: Executor(
+            page_factory=lambda: BasePage(actions=actions),
+            logger=logger,
+        ),
+        reporter_factory=lambda results_dir: AllureReporter(results_dir=results_dir),
+        logger_factory=lambda level, log_file: configure_runtime_logger(
+            level=level,
+            log_file=log_file,
+        ),
+        email_notifier_factory=lambda config: EmailNotifier(config=config),
+        dingtalk_notifier_factory=lambda webhook: DingTalkNotifier(webhook=webhook),
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="webtest-framework",
+        description="Execute DSL-driven web automation tests.",
+    )
+    parser.add_argument("dsl_path", help="Path to XML/YAML/JSON test case file.")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to runtime config file.",
+    )
+    parser.add_argument(
+        "--browser",
+        choices=("chrome", "firefox", "edge"),
+        default="chrome",
+        help="Browser type used by Selenium.",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run browser in headless mode.",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="INFO",
+        help="Runtime log level.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+    parser.add_argument(
+        "--allure",
+        action="store_true",
+        help="Write Allure artifacts and generate report.",
+    )
+    parser.add_argument(
+        "--allure-results-dir",
+        default="artifacts/allure-results",
+        help="Allure results output directory.",
+    )
+    parser.add_argument(
+        "--allure-report-dir",
+        default="artifacts/allure-report",
+        help="Generated Allure HTML report directory.",
+    )
+    parser.add_argument(
+        "--log-file",
+        default="artifacts/runtime.log",
+        help="Runtime log file path.",
+    )
+    parser.add_argument(
+        "--notify-email",
+        action="store_true",
+        help="Send execution summary by email. Requires SMTP config file.",
+    )
+    parser.add_argument(
+        "--notify-dingtalk",
+        action="store_true",
+        help="Send execution summary to DingTalk webhook in config file.",
+    )
+    return parser
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    dependencies: RuntimeDependencies | None = None,
+) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    dependencies = dependencies or _default_dependencies()
+    config = load_runtime_config(args.config)
+
+    browser = config.get("browser", args.browser)
+    headless = config.get("headless", args.headless)
+    implicit_wait = int(config.get("implicit_wait", 10))
+    log_level = config.get("log_level", args.log_level)
+
+    logger = dependencies.logger_factory(log_level, args.log_file)
+    report_context = ReportContext(
+        browser=browser,
+        headless=headless,
+        python_version=platform.python_version(),
+        framework_version=__version__,
+        runtime_log_path=args.log_file,
+        dsl_path=args.dsl_path,
+    )
+    driver_manager = dependencies.driver_manager_factory()
+    driver = driver_manager.create_driver(
+        DriverConfig(browser=browser, headless=headless, implicit_wait=implicit_wait)
+    )
+    try:
+        actions = dependencies.actions_factory(driver)
+        executor = dependencies.executor_factory(actions, logger)
+        suite_result = executor.run_file(args.dsl_path)
+        _handle_reporting(args, suite_result, dependencies, logger, report_context)
+        _handle_notifications(args, suite_result, config, dependencies)
+    finally:
+        driver_manager.quit_driver(driver)
+
+    return 0 if suite_result.failed_cases == 0 else 1
+
+
+def _handle_reporting(
+    args,
+    suite_result: SuiteExecutionResult,
+    dependencies: RuntimeDependencies,
+    logger: object,
+    report_context: ReportContext,
+) -> None:
+    if not args.allure:
+        return
+    reporter = dependencies.reporter_factory(args.allure_results_dir)
+    reporter.write_suite_result(suite_result, context=report_context)
+    reporter.write_environment_properties(report_context)
+    generated = reporter.generate_html_report(output_dir=args.allure_report_dir)
+    if not generated and hasattr(logger, "error"):
+        logger.error("Allure report generation failed")
+
+
+def _handle_notifications(
+    args,
+    suite_result: SuiteExecutionResult,
+    config: dict,
+    dependencies: RuntimeDependencies,
+) -> None:
+    summary = (
+        f"Suite={suite_result.name}, total={suite_result.total_cases}, "
+        f"passed={suite_result.passed_cases}, failed={suite_result.failed_cases}"
+    )
+    if args.notify_email:
+        smtp = config.get("smtp")
+        if not isinstance(smtp, dict):
+            raise ValueError("SMTP config is required when --notify-email is enabled.")
+        required_keys = {"host", "port", "username", "password", "sender", "receivers"}
+        missing_keys = sorted(required_keys - smtp.keys())
+        if missing_keys:
+            raise ValueError(f"Missing SMTP config keys: {', '.join(missing_keys)}")
+        notifier = dependencies.email_notifier_factory(
+            SmtpConfig(
+                host=smtp["host"],
+                port=int(smtp["port"]),
+                username=smtp["username"],
+                password=smtp["password"],
+                sender=smtp["sender"],
+                receivers=list(smtp["receivers"]),
+                use_ssl=bool(smtp.get("use_ssl", True)),
+                timeout_seconds=int(smtp.get("timeout_seconds", 10)),
+                retries=int(smtp.get("retries", 0)),
+            )
+        )
+        notifier.send(subject="Web Automation Result", body=summary)
+    if args.notify_dingtalk:
+        webhook = config.get("dingtalk_webhook")
+        if not webhook:
+            raise ValueError(
+                "DingTalk webhook is required when --notify-dingtalk is enabled."
+            )
+        notifier = dependencies.dingtalk_notifier_factory(str(webhook))
+        retries = int(config.get("dingtalk_retries", 0))
+        if hasattr(notifier, "retries"):
+            notifier.retries = retries
+        notifier.send(title="Web Automation Result", text=summary)
+
+
+def entrypoint() -> None:
+    raise SystemExit(main())
