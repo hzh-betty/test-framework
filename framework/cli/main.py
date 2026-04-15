@@ -7,10 +7,13 @@ from typing import Callable, Sequence
 
 from framework import __version__
 from framework.core import load_runtime_config
+from framework.dsl.models import SuiteSpec
 from framework.executor import Executor, SuiteExecutionResult
+from framework.executor.execution_control import select_cases
 from framework.logging import configure_runtime_logger
 from framework.notify import DingTalkNotifier, EmailNotifier, SmtpConfig
 from framework.page_objects.base_page import BasePage
+from framework.parser import get_parser
 from framework.reporting import AllureReporter, ReportContext
 from framework.selenium import DriverConfig, DriverManager, SeleniumActions
 
@@ -148,6 +151,27 @@ def main(
         runtime_log_path=args.log_file,
         dsl_path=args.dsl_path,
     )
+    suite = _load_suite(args.dsl_path)
+    selected_cases = select_cases(
+        suite.cases,
+        include_expr=args.include_tag_expr,
+        exclude_expr=args.exclude_tag_expr,
+        allowed_case_names=None,
+    )
+    if not selected_cases:
+        if not args.run_empty_suite:
+            raise ValueError("Suite contains no runnable cases after filtering.")
+        suite_result = SuiteExecutionResult(
+            name=suite.name,
+            total_cases=0,
+            passed_cases=0,
+            failed_cases=0,
+            case_results=[],
+        )
+        _handle_reporting(args, suite_result, dependencies, logger, report_context)
+        _handle_notifications(args, suite_result, config, dependencies)
+        return 0
+
     driver_manager = dependencies.driver_manager_factory()
     driver = driver_manager.create_driver(
         DriverConfig(browser=browser, headless=headless, implicit_wait=implicit_wait)
@@ -230,6 +254,11 @@ def _handle_notifications(
         if hasattr(notifier, "retries"):
             notifier.retries = retries
         notifier.send(title="Web Automation Result", text=summary)
+
+
+def _load_suite(dsl_path: str) -> SuiteSpec:
+    parser = get_parser(dsl_path)
+    return parser.parse(dsl_path)
 
 
 def entrypoint() -> None:

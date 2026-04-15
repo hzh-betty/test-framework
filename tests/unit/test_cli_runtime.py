@@ -95,7 +95,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login" tags="smoke"><step action="open" target="https://example.test" /></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -278,6 +278,44 @@ class TestCliRuntime(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         self.assertIn("Allure report generation failed", logger.error_messages[0])
+
+    def test_main_skips_driver_startup_for_empty_filtered_suite_when_allowed(self):
+        driver_manager = FakeDriverManager()
+        logger = FakeLogger()
+        deps = RuntimeDependencies(
+            driver_manager_factory=lambda: driver_manager,
+            actions_factory=lambda _driver: object(),
+            executor_factory=lambda _actions, _logger: FakeExecutor(
+                SuiteExecutionResult(
+                    name="Smoke",
+                    total_cases=1,
+                    passed_cases=1,
+                    failed_cases=0,
+                    case_results=[],
+                )
+            ),
+            reporter_factory=lambda _results_dir: FakeReporter(),
+            logger_factory=lambda _level, _file: logger,
+            email_notifier_factory=lambda _config: FakeNotifier(),
+            dingtalk_notifier_factory=lambda _webhook: FakeNotifier(),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xml_file = Path(tmpdir) / "case.xml"
+            xml_file.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<suite name="SmokeSuite"><case name="Login" tags="smoke"><step action="open" target="https://example.test" /></case></suite>
+""",
+                encoding="utf-8",
+            )
+            rc = main(
+                [str(xml_file), "--include-tag-expr", "regression", "--run-empty-suite"],
+                dependencies=deps,
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertFalse(driver_manager.created)
+        self.assertFalse(driver_manager.quitted)
 
 
 if __name__ == "__main__":

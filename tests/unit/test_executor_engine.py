@@ -160,6 +160,80 @@ class TestExecutorEngine(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Tag expression is empty"):
             executor.run_suite(suite, include_tag_expr="")
 
+    def test_run_suite_include_only_behavior(self):
+        suite = SuiteSpec(
+            name="Smoke",
+            cases=[
+                CaseSpec(name="Login", tags=["smoke"], steps=[]),
+                CaseSpec(name="Checkout", tags=["regression"], steps=[]),
+            ],
+        )
+        executor = Executor(page_factory=lambda: FakePage([]))
+
+        result = executor.run_suite(suite, include_tag_expr="smoke")
+
+        self.assertEqual(result.total_cases, 1)
+        self.assertEqual([case.name for case in result.case_results], ["Login"])
+
+    def test_run_suite_exclude_only_behavior(self):
+        suite = SuiteSpec(
+            name="Smoke",
+            cases=[
+                CaseSpec(name="Login", tags=["smoke"], steps=[]),
+                CaseSpec(name="FlakyCase", tags=["smoke", "flaky"], steps=[]),
+            ],
+        )
+        executor = Executor(page_factory=lambda: FakePage([]))
+
+        result = executor.run_suite(suite, exclude_tag_expr="flaky")
+
+        self.assertEqual(result.total_cases, 1)
+        self.assertEqual([case.name for case in result.case_results], ["Login"])
+
+    def test_run_suite_combines_include_and_exclude_filters(self):
+        suite = SuiteSpec(
+            name="Smoke",
+            cases=[
+                CaseSpec(name="Login", tags=["smoke"], steps=[]),
+                CaseSpec(name="Checkout", tags=["regression"], steps=[]),
+                CaseSpec(name="FlakyLogin", tags=["smoke", "flaky"], steps=[]),
+            ],
+        )
+        executor = Executor(page_factory=lambda: FakePage([]))
+
+        result = executor.run_suite(
+            suite,
+            include_tag_expr="smoke OR regression",
+            exclude_tag_expr="flaky",
+        )
+
+        self.assertEqual(result.total_cases, 2)
+        self.assertEqual(
+            [case.name for case in result.case_results],
+            ["Login", "Checkout"],
+        )
+
+    def test_run_suite_allowed_case_names_interact_with_tag_filters(self):
+        suite = SuiteSpec(
+            name="Smoke",
+            cases=[
+                CaseSpec(name="Login", tags=["smoke"], steps=[]),
+                CaseSpec(name="Checkout", tags=["smoke", "flaky"], steps=[]),
+                CaseSpec(name="Profile", tags=["smoke"], steps=[]),
+            ],
+        )
+        executor = Executor(page_factory=lambda: FakePage([]))
+
+        result = executor.run_suite(
+            suite,
+            include_tag_expr="smoke",
+            exclude_tag_expr="flaky",
+            allowed_case_names={"Login", "Checkout"},
+        )
+
+        self.assertEqual(result.total_cases, 1)
+        self.assertEqual([case.name for case in result.case_results], ["Login"])
+
 
 if __name__ == "__main__":
     unittest.main()
