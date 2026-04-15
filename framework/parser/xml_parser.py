@@ -22,5 +22,10 @@ class XmlCaseParser:
                 )
                 for step in case.findall("step")
             ]
-            cases.append(CaseSpec(name=case.attrib["name"], steps=steps))
+            tags = [
+                tag.strip().lower()
+                for tag in case.attrib.get("tags", "").split(",")
+                if tag.strip()
+            ]
+            cases.append(CaseSpec(name=case.attrib["name"], steps=steps, tags=tags))
         return SuiteSpec(name=root.attrib["name"], cases=cases)

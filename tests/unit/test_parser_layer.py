@@ -22,6 +22,10 @@ class TestParserLayer(unittest.TestCase):
         self.assertEqual(suite.cases[0].steps[0].action, "open")
         self.assertEqual(suite.cases[0].steps[0].target, "https://example.test/login")
 
+    def test_xml_parser_parses_case_tags(self):
+        suite = XmlCaseParser().parse(FIXTURES / "valid_case_with_tags.xml")
+        self.assertEqual(suite.cases[0].tags, ["smoke", "login"])
+
     def test_xml_parser_raises_on_invalid_xml(self):
         with self.assertRaises(ValueError):
             XmlCaseParser().parse(FIXTURES / "invalid_case.xml")

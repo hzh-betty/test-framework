@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suite name="SmokeSuite">
+  <case name="Login success" tags="smoke,login">
+    <step action="open" target="https://example.test/login" />
+  </case>
+</suite>
