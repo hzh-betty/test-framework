@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.Zone.Identifier
-robotframework-master/
+tmp/
 artifacts/
 .pytest_cache/
 .coverage
