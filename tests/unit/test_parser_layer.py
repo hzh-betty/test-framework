@@ -2,9 +2,13 @@ import unittest
 from pathlib import Path
 
 from framework.parser import get_parser
-from framework.parser.json_parser import JsonCaseParser
 from framework.parser.xml_parser import XmlCaseParser
 from framework.parser.yaml_parser import YamlCaseParser
+
+try:
+    from framework.parser.json_parser import JsonCaseParser
+except ModuleNotFoundError:  # Task4
+    JsonCaseParser = None
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "dsl"
@@ -20,6 +24,8 @@ class TestParserLayer(unittest.TestCase):
         self.assertIsInstance(parser, YamlCaseParser)
 
     def test_get_parser_returns_json_parser_for_json_file(self):
+        if JsonCaseParser is None:
+            self.skipTest("JsonCaseParser not available until Task4")
         parser = get_parser("cases/login.json")
         self.assertIsInstance(parser, JsonCaseParser)
 
@@ -44,6 +50,8 @@ class TestParserLayer(unittest.TestCase):
         self.assertEqual(case.steps[0].target, "https://example.test/login")
 
     def test_json_parser_parses_suite_case_steps_and_tags(self):
+        if JsonCaseParser is None:
+            self.skipTest("JsonCaseParser not available until Task4")
         suite = JsonCaseParser().parse(FIXTURES / "valid_case.json")
         self.assertEqual(suite.name, "SmokeSuite")
         self.assertEqual(len(suite.cases), 1)
@@ -67,8 +75,20 @@ class TestParserLayer(unittest.TestCase):
             YamlCaseParser().parse(FIXTURES / "invalid_unknown_field.yaml")
 
     def test_json_parser_raises_on_type_mismatch_fixture(self):
+        if JsonCaseParser is None:
+            self.skipTest("JsonCaseParser not available until Task4")
         with self.assertRaises(ValueError):
             JsonCaseParser().parse(FIXTURES / "invalid_type.json")
+
+    def test_yaml_parser_raises_on_syntax_error_with_file_context(self):
+        case_file = FIXTURES / "invalid_syntax.yaml"
+        with self.assertRaisesRegex(ValueError, r"invalid_syntax\.yaml"):
+            YamlCaseParser().parse(case_file)
+
+    def test_yaml_parser_raises_when_root_is_not_mapping(self):
+        case_file = FIXTURES / "invalid_root_sequence.yaml"
+        with self.assertRaisesRegex(ValueError, r"dsl \$: expected a mapping"):
+            YamlCaseParser().parse(case_file)
 
     def test_xml_parser_raises_on_invalid_xml(self):
         with self.assertRaises(ValueError):
