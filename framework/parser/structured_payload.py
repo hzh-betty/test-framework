@@ -103,6 +103,10 @@ def _require_string(data: Mapping[str, object], key: str, source: str, path: str
 def _require_allowed_keys(
     data: Mapping[str, object], allowed_keys: set[str], source: str, path: str
 ) -> None:
+    for key in data:
+        if not isinstance(key, str):
+            _raise_value_error(source, path, "expected mapping keys to be strings")
+
     for key in sorted(data):
         if key not in allowed_keys:
             _raise_value_error(source, f"{path}.{key}", "unknown key")
