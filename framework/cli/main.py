@@ -17,6 +17,10 @@ from framework.page_objects.base_page import BasePage
 from framework.parser import get_parser
 from framework.reporting import AllureReporter, ReportContext
 from framework.reporting.case_results import read_failed_case_names, write_case_results
+from framework.reporting.result_merge import (
+    load_merged_suite_result,
+    parse_merge_results_argument,
+)
 from framework.selenium import DriverConfig, DriverManager, SeleniumActions
 
 
@@ -54,7 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="webtest-framework",
         description="Execute DSL-driven web automation tests.",
     )
-    parser.add_argument("dsl_path", help="Path to XML/YAML/JSON test case file.")
+    parser.add_argument(
+        "dsl_path",
+        nargs="?",
+        help="Path to XML/YAML/JSON test case file.",
+    )
     parser.add_argument(
         "--config",
         default=None,
@@ -132,6 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to case-results.json; rerun only failed cases from that file.",
     )
+    parser.add_argument(
+        "--merge-results",
+        default=None,
+        help="Comma-separated case-results JSON files to merge and report.",
+    )
     return parser
 
 
@@ -141,6 +154,8 @@ def main(
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if not args.dsl_path and not args.merge_results:
+        parser.error("dsl_path is required unless --merge-results is provided.")
     dependencies = dependencies or _default_dependencies()
     config = load_runtime_config(args.config)
 
@@ -161,6 +176,14 @@ def main(
         runtime_log_path=args.log_file,
         dsl_path=args.dsl_path,
     )
+    if args.merge_results:
+        merge_paths = parse_merge_results_argument(args.merge_results)
+        suite_result = load_merged_suite_result(merge_paths)
+        _write_suite_case_results(suite_result)
+        _handle_reporting(args, suite_result, dependencies, logger, report_context)
+        _handle_notifications(args, suite_result, config, dependencies)
+        return 0 if suite_result.failed_cases == 0 else 1
+
     suite = _load_suite(args.dsl_path)
     selected_cases = select_cases(
         suite.cases,

@@ -72,6 +72,41 @@ class FakeLogger:
 
 
 class TestCliRuntime(unittest.TestCase):
+    def test_main_merge_results_skips_driver_creation(self):
+        logger = FakeLogger()
+        deps = RuntimeDependencies(
+            driver_manager_factory=lambda: (_ for _ in ()).throw(
+                AssertionError("driver manager must not be created in merge mode")
+            ),
+            actions_factory=lambda _driver: (_ for _ in ()).throw(
+                AssertionError("actions must not be created in merge mode")
+            ),
+            executor_factory=lambda _actions, _logger: (_ for _ in ()).throw(
+                AssertionError("executor must not be created in merge mode")
+            ),
+            reporter_factory=lambda _results_dir: FakeReporter(),
+            logger_factory=lambda _level, _file: logger,
+            email_notifier_factory=lambda _config: FakeNotifier(),
+            dingtalk_notifier_factory=lambda _webhook: FakeNotifier(),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            first = tmpdir_path / "first.json"
+            second = tmpdir_path / "second.json"
+            write_case_results(first, [{"name": "Login", "passed": False}])
+            write_case_results(second, [{"name": "Login", "passed": True}])
+
+            rc = main(
+                [
+                    "--merge-results",
+                    f"{first},{second}",
+                ],
+                dependencies=deps,
+            )
+
+        self.assertEqual(rc, 0)
+
     def test_main_passes_execution_control_options_to_executor(self):
         driver_manager = FakeDriverManager()
         logger = FakeLogger()
