@@ -26,16 +26,22 @@ def test_tag_expression_matches_tags_case_insensitively() -> None:
 
 
 @pytest.mark.parametrize(
-    "expression",
+    ("expression", "error_pattern"),
     [
-        "",
-        "smoke AND OR critical",
-        "smoke AND (critical OR)",
-        "NOT",
-        "(smoke OR critical",
-        "smoke)",
+        ("", r"Tag expression is empty"),
+        (
+            "smoke AND OR critical",
+            r"unexpected token 'OR' at position 10; expected TAG, NOT, LPAREN",
+        ),
+        (
+            "smoke AND (critical OR)",
+            r"unexpected token '\)' at position 22; expected TAG, NOT, LPAREN",
+        ),
+        ("NOT", r"unexpected end of expression at position 3; expected TAG, NOT, LPAREN"),
+        ("(smoke OR critical", r"unexpected end of expression at position 18; expected RPAREN"),
+        ("smoke)", r"unexpected token '\)' at position 5; expected end of expression"),
     ],
 )
-def test_tag_expression_invalid_syntax(expression: str) -> None:
-    with pytest.raises(ValueError):
+def test_tag_expression_invalid_syntax(expression: str, error_pattern: str) -> None:
+    with pytest.raises(ValueError, match=error_pattern):
         compile_tag_expression(expression)
