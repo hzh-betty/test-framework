@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suite name="SmokeSuite">
+  <variables>
+    <var name="base_url" value="https://example.test" />
+  </variables>
+  <setup>
+    <step action="open" target="https://example.test/login" />
+  </setup>
+  <case name="Login success" tags="smoke,login" retry="2" continue_on_failure="true">
+    <variables>
+      <var name="username" value="demo" />
+      <var name="password" value="mode" />
+    </variables>
+    <setup>
+      <step action="wait_visible" target="id=username" />
+    </setup>
+    <step action="open" target="https://example.test/login" />
+    <step action="click" target="id=submit" retry="3" continue_on_failure="true" />
+    <teardown>
+      <step action="screenshot" target="artifacts/case-end.png" />
+    </teardown>
+  </case>
+  <teardown>
+    <step action="screenshot" target="artifacts/suite-end.png" />
+  </teardown>
+</suite>

@@ -4,6 +4,7 @@ import argparse
 from dataclasses import asdict, dataclass
 import platform
 from pathlib import Path
+import threading
 from typing import Callable, Sequence
 
 from framework import __version__
@@ -35,6 +36,43 @@ class RuntimeDependencies:
     dingtalk_notifier_factory: Callable[[str], DingTalkNotifier]
 
 
+class _ThreadLocalActionsProxy:
+    def __init__(
+        self,
+        driver_manager: DriverManager,
+        driver_config: DriverConfig,
+        actions_factory: Callable[[object], SeleniumActions],
+    ):
+        self._driver_manager = driver_manager
+        self._driver_config = driver_config
+        self._actions_factory = actions_factory
+        self._thread_state = threading.local()
+        self._driver_lock = threading.Lock()
+        self._created_drivers: list[object] = []
+
+    def _actions(self) -> SeleniumActions:
+        actions = getattr(self._thread_state, "actions", None)
+        if actions is not None:
+            return actions
+        with self._driver_lock:
+            actions = getattr(self._thread_state, "actions", None)
+            if actions is not None:
+                return actions
+            driver = self._driver_manager.create_driver(self._driver_config)
+            self._created_drivers.append(driver)
+            actions = self._actions_factory(driver)
+            self._thread_state.actions = actions
+            return actions
+
+    def __getattr__(self, name: str):
+        return getattr(self._actions(), name)
+
+    def quit_all(self) -> None:
+        for driver in self._created_drivers:
+            self._driver_manager.quit_driver(driver)
+        self._created_drivers.clear()
+
+
 def _default_dependencies() -> RuntimeDependencies:
     return RuntimeDependencies(
         driver_manager_factory=lambda: DriverManager(),
@@ -51,6 +89,16 @@ def _default_dependencies() -> RuntimeDependencies:
         email_notifier_factory=lambda config: EmailNotifier(config=config),
         dingtalk_notifier_factory=lambda webhook: DingTalkNotifier(webhook=webhook),
     )
+
+
+def _parse_workers(value: str) -> int:
+    try:
+        workers = int(value)
+    except ValueError as exc:  # pragma: no cover - argparse enforces string input
+        raise argparse.ArgumentTypeError("workers must be an integer.") from exc
+    if workers < 0:
+        raise argparse.ArgumentTypeError("workers must be greater than or equal to 0.")
+    return workers
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -145,6 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Comma-separated case-results JSON files to merge and report.",
     )
+    parser.add_argument(
+        "--workers",
+        type=_parse_workers,
+        default=1,
+        help="Case-level worker count; 0 or 1 keeps serial execution.",
+    )
     return parser
 
 
@@ -184,7 +238,7 @@ def main(
         _write_suite_case_results(suite_result)
         _handle_reporting(args, suite_result, dependencies, logger, report_context)
         _handle_notifications(args, suite_result, config, dependencies)
-        return 0 if suite_result.failed_cases == 0 else 1
+        return 0 if _suite_passed(suite_result) else 1
 
     suite = _load_suite(args.dsl_path)
     selected_cases = select_cases(
@@ -209,31 +263,63 @@ def main(
         return 0
 
     driver_manager = dependencies.driver_manager_factory()
-    driver = driver_manager.create_driver(
-        DriverConfig(browser=browser, headless=headless, implicit_wait=implicit_wait)
+    driver_config = DriverConfig(
+        browser=browser,
+        headless=headless,
+        implicit_wait=implicit_wait,
     )
-    try:
-        actions = dependencies.actions_factory(driver)
-        executor = dependencies.executor_factory(actions, logger)
-        suite_result = executor.run_file(
-            args.dsl_path,
-            include_tag_expr=args.include_tag_expr,
-            exclude_tag_expr=args.exclude_tag_expr,
-            run_empty_suite=args.run_empty_suite,
-            allowed_case_names=allowed_case_names,
+    if args.workers <= 1:
+        driver = driver_manager.create_driver(driver_config)
+        try:
+            actions = dependencies.actions_factory(driver)
+            executor = dependencies.executor_factory(actions, logger)
+            suite_result = executor.run_file(
+                args.dsl_path,
+                include_tag_expr=args.include_tag_expr,
+                exclude_tag_expr=args.exclude_tag_expr,
+                run_empty_suite=args.run_empty_suite,
+                allowed_case_names=allowed_case_names,
+                workers=args.workers,
+            )
+            _write_suite_case_results(suite_result)
+            _handle_reporting(args, suite_result, dependencies, logger, report_context)
+            _handle_notifications(args, suite_result, config, dependencies)
+        finally:
+            driver_manager.quit_driver(driver)
+    else:
+        actions = _ThreadLocalActionsProxy(
+            driver_manager=driver_manager,
+            driver_config=driver_config,
+            actions_factory=dependencies.actions_factory,
         )
-        _write_suite_case_results(suite_result)
-        _handle_reporting(args, suite_result, dependencies, logger, report_context)
-        _handle_notifications(args, suite_result, config, dependencies)
-    finally:
-        driver_manager.quit_driver(driver)
+        try:
+            executor = dependencies.executor_factory(actions, logger)
+            suite_result = executor.run_file(
+                args.dsl_path,
+                include_tag_expr=args.include_tag_expr,
+                exclude_tag_expr=args.exclude_tag_expr,
+                run_empty_suite=args.run_empty_suite,
+                allowed_case_names=allowed_case_names,
+                workers=args.workers,
+            )
+            _write_suite_case_results(suite_result)
+            _handle_reporting(args, suite_result, dependencies, logger, report_context)
+            _handle_notifications(args, suite_result, config, dependencies)
+        finally:
+            actions.quit_all()
 
-    return 0 if suite_result.failed_cases == 0 else 1
+    return 0 if _suite_passed(suite_result) else 1
 
 
 def _write_suite_case_results(suite_result: SuiteExecutionResult) -> None:
     cases = [asdict(case_result) for case_result in suite_result.case_results]
-    write_case_results(Path("artifacts/case-results.json"), cases)
+    write_case_results(
+        Path("artifacts/case-results.json"),
+        cases,
+        suite_teardown_failed=suite_result.suite_teardown_failed,
+        suite_teardown_error_message=suite_result.suite_teardown_error_message,
+        suite_teardown_failure_type=suite_result.suite_teardown_failure_type,
+    )
 
 
 def _handle_reporting(
@@ -296,6 +382,10 @@ def _handle_notifications(
         if hasattr(notifier, "retries"):
             notifier.retries = retries
         notifier.send(title="Web Automation Result", text=summary)
+
+
+def _suite_passed(suite_result: SuiteExecutionResult) -> bool:
+    return suite_result.failed_cases == 0 and not suite_result.suite_teardown_failed
 
 
 def _load_suite(dsl_path: str) -> SuiteSpec:

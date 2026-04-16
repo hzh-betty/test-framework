@@ -5,6 +5,8 @@ from pathlib import Path
 from framework.executor.runner import Executor
 from framework.page_objects.base_page import BasePage
 
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "dsl"
+
 
 class FakeActions:
     def __init__(self):
@@ -59,6 +61,22 @@ class TestXmlExecutionFlow(unittest.TestCase):
                     ("click", "id=submit"),
                 ],
             )
+
+    def test_executor_run_file_executes_keyword_calls_and_variable_substitution(self):
+        actions = FakeActions()
+        executor = Executor(page_factory=lambda: BasePage(actions=actions))
+
+        result = executor.run_file(str(FIXTURES / "valid_case_keywords.xml"))
+
+        self.assertEqual(result.passed_cases, 1)
+        self.assertEqual(
+            actions.calls,
+            [
+                ("open", "https://example.test/login"),
+                ("type", "id=username", "case-user"),
+                ("click", "id=submit"),
+            ],
+        )
 
 
 if __name__ == "__main__":

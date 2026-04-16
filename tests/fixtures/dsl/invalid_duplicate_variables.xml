@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suite name="DuplicateVariables">
+  <variables>
+    <var name="base_url" value="https://example.test" />
+    <var name="base_url" value="https://another.example.test" />
+  </variables>
+  <case name="Login">
+    <step action="open" target="https://example.test/login" />
+  </case>
+</suite>

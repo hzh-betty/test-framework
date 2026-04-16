@@ -50,6 +50,9 @@ class AllureReporter:
             "total_cases": result.total_cases,
             "passed_cases": result.passed_cases,
             "failed_cases": result.failed_cases,
+            "suite_teardown_failed": result.suite_teardown_failed,
+            "suite_teardown_error_message": result.suite_teardown_error_message,
+            "suite_teardown_failure_type": result.suite_teardown_failure_type,
         }
         summary_file.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -67,7 +70,10 @@ class AllureReporter:
                 "stage": "finished",
                 "start": now,
                 "stop": now,
-                "statusDetails": {"message": case.error_message or ""},
+                "statusDetails": self._build_status_details(
+                    case.error_message,
+                    case.failure_type,
+                ),
                 "labels": [
                     {"name": "suite", "value": result.name},
                     {"name": "framework", "value": "custom-webtest-framework"},
@@ -75,6 +81,8 @@ class AllureReporter:
                 "steps": steps,
                 "attachments": attachments,
             }
+            if case.failure_type:
+                case_payload["labels"].append({"name": "failureType", "value": case.failure_type})
             case_file = self.results_dir / f"{case_payload['uuid']}-result.json"
             case_file.write_text(
                 json.dumps(case_payload, ensure_ascii=False, indent=2),
@@ -83,11 +91,88 @@ class AllureReporter:
         return summary_file
 
     def _build_step_payload(self, step) -> dict:
-        return {
-            "name": f"{step.action} {step.target}",
+        chain = " > ".join(step.call_chain) if getattr(step, "call_chain", None) else ""
+        name = f"{step.action} {step.target}"
+        if chain:
+            name = f"[{chain}] {name}"
+        diagnostics = self._build_step_diagnostics(step)
+        parameters = self._build_step_parameters(step)
+        payload = {
+            "name": name,
             "status": "passed" if step.passed else "failed",
-            "statusDetails": {"message": step.error_message or ""},
+            "statusDetails": self._build_status_details(
+                step.error_message,
+                getattr(step, "failure_type", None),
+                diagnostics=diagnostics,
+            ),
         }
+        if parameters:
+            payload["parameters"] = parameters
+        return payload
+
+    def _build_status_details(
+        self,
+        message: str | None,
+        failure_type: str | None,
+        diagnostics: dict | None = None,
+    ) -> dict:
+        payload: dict[str, object] = {"message": message or ""}
+        if failure_type:
+            payload["failureType"] = failure_type
+        if diagnostics:
+            payload["diagnostics"] = diagnostics
+        return payload
+
+    def _build_step_diagnostics(self, step) -> dict:
+        diagnostics: dict[str, object] = {}
+        if getattr(step, "duration_ms", None) is not None:
+            diagnostics["duration_ms"] = step.duration_ms
+        if getattr(step, "retry_attempt", None) is not None:
+            diagnostics["retry_attempt"] = step.retry_attempt
+        if getattr(step, "retry_max_retries", None) is not None:
+            diagnostics["retry_max_retries"] = step.retry_max_retries
+        if getattr(step, "case_attempt", None) is not None:
+            diagnostics["case_attempt"] = step.case_attempt
+        if getattr(step, "case_max_retries", None) is not None:
+            diagnostics["case_max_retries"] = step.case_max_retries
+        retry_trace = getattr(step, "retry_trace", None) or []
+        if retry_trace:
+            diagnostics["retry_trace"] = retry_trace
+        if getattr(step, "resolved_locator", None) is not None:
+            diagnostics["resolved_locator"] = step.resolved_locator
+        if getattr(step, "current_url", None) is not None:
+            diagnostics["current_url"] = step.current_url
+        return diagnostics
+
+    def _build_step_parameters(self, step) -> list[dict[str, str]]:
+        parameters: list[dict[str, str]] = []
+        duration_ms = getattr(step, "duration_ms", None)
+        if duration_ms is not None:
+            parameters.append({"name": "duration_ms", "value": str(duration_ms)})
+        retry_attempt = getattr(step, "retry_attempt", None)
+        if retry_attempt is not None:
+            parameters.append({"name": "retry_attempt", "value": str(retry_attempt)})
+        retry_max_retries = getattr(step, "retry_max_retries", None)
+        if retry_max_retries is not None:
+            parameters.append({"name": "retry_max_retries", "value": str(retry_max_retries)})
+        case_attempt = getattr(step, "case_attempt", None)
+        if case_attempt is not None:
+            parameters.append({"name": "case_attempt", "value": str(case_attempt)})
+        case_max_retries = getattr(step, "case_max_retries", None)
+        if case_max_retries is not None:
+            parameters.append({"name": "case_max_retries", "value": str(case_max_retries)})
+        locator = getattr(step, "resolved_locator", None)
+        if isinstance(locator, dict):
+            by = locator.get("by")
+            value = locator.get("value")
+            if isinstance(by, str):
+                parameters.append({"name": "locator_by", "value": by})
+            if isinstance(value, str):
+                parameters.append({"name": "locator_value", "value": value})
+        current_url = getattr(step, "current_url", None)
+        if isinstance(current_url, str):
+            parameters.append({"name": "current_url", "value": current_url})
+        return parameters
 
     def _build_attachments(self, context, case_name, step_results) -> list[dict]:
         attachments: list[dict] = []

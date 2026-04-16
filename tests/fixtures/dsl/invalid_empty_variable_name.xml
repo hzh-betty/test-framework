@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suite name="EmptyVariableName">
+  <variables>
+    <var name=" " value="https://example.test" />
+  </variables>
+  <case name="Login">
+    <step action="open" target="https://example.test/login" />
+  </case>
+</suite>

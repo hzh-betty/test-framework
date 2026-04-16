@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suite name="DuplicateKeywords">
+  <keywords>
+    <keyword name="login">
+      <step action="open" target="https://example.test/login" />
+    </keyword>
+    <keyword name="login">
+      <step action="click" target="id=submit" />
+    </keyword>
+  </keywords>
+  <case name="Login">
+    <step action="call" target="login" />
+  </case>
+</suite>
