@@ -76,6 +76,20 @@ class TestParserLayer(unittest.TestCase):
         ):
             JsonCaseParser().parse(FIXTURES / "invalid_type.json")
 
+    def test_yaml_parser_raises_on_negative_retry_fixture(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"invalid_negative_retry\.yaml \$\.cases\[0\]\.retry: expected a non-negative integer",
+        ):
+            YamlCaseParser().parse(FIXTURES / "invalid_negative_retry.yaml")
+
+    def test_json_parser_raises_on_negative_retry_fixture(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"invalid_negative_retry\.json \$\.cases\[0\]\.retry: expected a non-negative integer",
+        ):
+            JsonCaseParser().parse(FIXTURES / "invalid_negative_retry.json")
+
     def test_yaml_parser_raises_on_syntax_error_with_file_context(self):
         case_file = FIXTURES / "invalid_syntax.yaml"
         with self.assertRaisesRegex(ValueError, r"invalid_syntax\.yaml"):
@@ -91,6 +105,135 @@ class TestParserLayer(unittest.TestCase):
     def test_xml_parser_raises_on_invalid_xml(self):
         with self.assertRaises(ValueError):
             XmlCaseParser().parse(FIXTURES / "invalid_case.xml")
+
+    def test_xml_parser_raises_on_negative_retry_fixture(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"XML schema validation failed",
+        ):
+            XmlCaseParser().parse(FIXTURES / "invalid_negative_retry.xml")
+
+    def test_xml_parser_raises_on_duplicate_variable_names(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"invalid_duplicate_variables\.xml: duplicate variable name 'base_url'",
+        ):
+            XmlCaseParser().parse(FIXTURES / "invalid_duplicate_variables.xml")
+
+    def test_xml_parser_raises_on_duplicate_keyword_names(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"invalid_duplicate_keywords\.xml: duplicate keyword name 'login'",
+        ):
+            XmlCaseParser().parse(FIXTURES / "invalid_duplicate_keywords.xml")
+
+    def test_xml_parser_raises_on_empty_variable_name(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"invalid_empty_variable_name\.xml: empty variable name",
+        ):
+            XmlCaseParser().parse(FIXTURES / "invalid_empty_variable_name.xml")
+
+    def test_xml_parser_raises_on_empty_keyword_name(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"invalid_empty_keyword_name\.xml: empty keyword name",
+        ):
+            XmlCaseParser().parse(FIXTURES / "invalid_empty_keyword_name.xml")
+
+    def test_yaml_parser_parses_extended_suite_case_and_step_fields(self):
+        suite = YamlCaseParser().parse(FIXTURES / "valid_case_extended.yaml")
+
+        self.assertEqual(suite.variables["base_url"], "https://example.test")
+        self.assertEqual(suite.setup[0].action, "open")
+        self.assertEqual(suite.teardown[0].action, "screenshot")
+
+        case = suite.cases[0]
+        self.assertEqual(case.variables["username"], "demo")
+        self.assertEqual(case.retry, 2)
+        self.assertTrue(case.continue_on_failure)
+        self.assertEqual(case.setup[0].action, "wait_visible")
+        self.assertEqual(case.teardown[0].action, "screenshot")
+        self.assertEqual(case.steps[1].retry, 3)
+        self.assertTrue(case.steps[1].continue_on_failure)
+
+    def test_json_parser_parses_extended_suite_case_and_step_fields(self):
+        suite = JsonCaseParser().parse(FIXTURES / "valid_case_extended.json")
+
+        self.assertEqual(suite.variables["base_url"], "https://example.test")
+        self.assertEqual(suite.setup[0].action, "open")
+        self.assertEqual(suite.teardown[0].action, "screenshot")
+
+        case = suite.cases[0]
+        self.assertEqual(case.variables["username"], "demo")
+        self.assertEqual(case.retry, 2)
+        self.assertTrue(case.continue_on_failure)
+        self.assertEqual(case.setup[0].action, "wait_visible")
+        self.assertEqual(case.teardown[0].action, "screenshot")
+        self.assertEqual(case.steps[1].retry, 3)
+        self.assertTrue(case.steps[1].continue_on_failure)
+
+    def test_xml_parser_parses_extended_suite_case_and_step_fields(self):
+        suite = XmlCaseParser().parse(FIXTURES / "valid_case_extended.xml")
+
+        self.assertEqual(suite.variables["base_url"], "https://example.test")
+        self.assertEqual(suite.setup[0].action, "open")
+        self.assertEqual(suite.teardown[0].action, "screenshot")
+
+        case = suite.cases[0]
+        self.assertEqual(case.variables["username"], "demo")
+        self.assertEqual(case.retry, 2)
+        self.assertTrue(case.continue_on_failure)
+        self.assertEqual(case.setup[0].action, "wait_visible")
+        self.assertEqual(case.teardown[0].action, "screenshot")
+        self.assertEqual(case.steps[1].retry, 3)
+        self.assertTrue(case.steps[1].continue_on_failure)
+
+    def test_xml_parser_parses_boolean_variants_for_case_and_step_continue_on_failure(self):
+        suite = XmlCaseParser().parse(FIXTURES / "valid_case_boolean_variants.xml")
+
+        self.assertEqual(
+            [case.continue_on_failure for case in suite.cases],
+            [True, True, False, False],
+        )
+        self.assertEqual(
+            [case.steps[0].continue_on_failure for case in suite.cases],
+            [True, True, False, False],
+        )
+
+    def test_xml_parser_raises_clear_error_for_invalid_boolean_value(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Invalid boolean value for continue_on_failure: 'maybe'.*true, false, 1, 0",
+        ):
+            XmlCaseParser()._parse_optional_bool("maybe")
+
+    def test_yaml_parser_parses_keywords_and_call_steps(self):
+        suite = YamlCaseParser().parse(FIXTURES / "valid_case_keywords.yaml")
+
+        self.assertIn("login", suite.keywords)
+        self.assertEqual(suite.keywords["submit-login"][0].action, "call")
+        self.assertEqual(suite.keywords["submit-login"][0].target, "login")
+        self.assertEqual(suite.cases[0].steps[0].action, "call")
+        self.assertEqual(suite.cases[0].steps[0].target, "submit-login")
+
+    def test_json_parser_parses_keywords_and_call_steps(self):
+        suite = JsonCaseParser().parse(FIXTURES / "valid_case_keywords.json")
+
+        self.assertIn("login", suite.keywords)
+        self.assertEqual(suite.keywords["submit-login"][0].action, "call")
+        self.assertEqual(suite.keywords["submit-login"][0].target, "login")
+        self.assertEqual(suite.cases[0].steps[0].action, "call")
+        self.assertEqual(suite.cases[0].steps[0].target, "submit-login")
+
+    def test_xml_parser_parses_keywords_and_call_steps(self):
+        suite = XmlCaseParser().parse(FIXTURES / "valid_case_keywords.xml")
+
+        self.assertIn("login", suite.keywords)
+        self.assertEqual(suite.keywords["submit-login"][0].action, "call")
+        self.assertEqual(suite.keywords["submit-login"][0].target, "login")
+        self.assertEqual(suite.cases[0].steps[0].action, "call")
+        self.assertEqual(suite.cases[0].steps[0].target, "submit-login")
 
 if __name__ == "__main__":
     unittest.main()

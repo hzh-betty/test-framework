@@ -12,38 +12,84 @@
 ├── Page Object层
 ├── 报告模块（Allure）
 ├── 日志模块
-├── 通知模块（邮件/钉钉）
+└── 通知模块（邮件/钉钉）
 ```
 
 ## 快速开始
 
 ```bash
 uv sync --dev
+
+# 兼容原有示例
 uv run webtest-framework examples/cases/login.xml --config examples/config/runtime.yaml --headless
+
+# 关键词/生命周期/变量示例
+uv run webtest-framework examples/cases/keyword_lifecycle.xml --config examples/config/runtime.yaml --headless
+
+# 扩展 Web 动作示例（支持并行参数）
+uv run webtest-framework examples/cases/web_actions_extended.xml --config examples/config/runtime.yaml --workers 2 --headless
 ```
 
-启用 Allure 报告：
+> 提示：示例中的 URL / 定位符（如 `https://example.test`、`id=...`）为演示占位符，请替换为你的目标系统实际地址与元素定位。
+
+启用 Allure：
 
 ```bash
 uv run webtest-framework examples/cases/login.xml --config examples/config/runtime.yaml --allure
 ```
 
-## V2 Allure 增强
+## DSL 能力（当前实现）
 
-- 步骤级结果（case result 中包含 step 级状态与错误信息）
-- 失败截图 + `runtime.log` + DSL 片段附件
-- `environment.properties`（`browser` / `headless` / `python` / `version`）
+- 支持 suite / case 级 `setup`、`teardown`、`variables`。
+- 支持 case / step 级 `retry`（非负整数）与 `continue_on_failure`（布尔）。
+- 支持变量插值：`\${var}`，可用于 `action` / `target` / `value`。
+- 支持关键词（`keywords`）与调用（`call`）：
+  - XML：`<step action="call" target="keyword-name" />`
+  - YAML/JSON：支持 `call` 简写（如 `- call: login-flow`）。
+- 支持 `wait_text` 超时后缀语法：`value="期望文本|timeout=7"`；未提供后缀时默认 10 秒。
+- 支持标签与筛选：`tags`、`--include-tag-expr`、`--exclude-tag-expr`。
 
-## CLI 参数（核心）
+## Selenium 动作（DSL `action`）
 
-- `dsl_path`：DSL 用例文件路径（支持 XML / YAML / JSON）
-- `--config`：运行配置文件（YAML）
-- `--browser`：`chrome` / `firefox` / `edge`
-- `--headless`：无头模式
-- `--log-level`：日志级别
-- `--allure`：生成 Allure 结果与报告
-- `--notify-email`：发送邮件通知（需配置 `smtp`）
-- `--notify-dingtalk`：发送钉钉通知（需配置 `dingtalk_webhook`）
+- 基础：`open`、`click`、`type`、`assert_text`、`screenshot`
+- 等待/断言：`wait_visible`、`wait_clickable`、`wait_text`、`wait_url_contains`、`assert_element_visible`、`assert_element_contains`
+- 交互扩展：`select`、`hover`、`switch_frame`、`switch_window`、`accept_alert`、`upload_file`
+
+说明：
+- `wait_visible` / `wait_clickable` / `wait_url_contains` / `assert_element_visible` / `accept_alert` 的 `value` 作为超时秒数（默认 10）。
+- `accept_alert` 的 `target` 仅作占位，实际控制项为 `value`（超时秒数）。
+- `wait_text` 的 `value` 可直接写文本，或使用 `文本|timeout=N`。
+- `switch_frame` 支持 `default` / `parent` / 数字索引 / 元素定位符。
+- `switch_window` 支持窗口句柄或数字索引。
+
+## 执行控制与并行
+
+- `--workers <N>`：case 级并行 worker 数。
+  - `0` 或 `1`：串行执行
+  - `>1`：并行执行
+- 并行模式仅并发 case；suite 级 `setup` 与 `teardown` 各执行一次。
+- case 结果顺序与筛选后输入顺序一致。
+- `workers > 1` 时，CLI 为每个线程懒加载独立 WebDriver，并在结束后统一回收。
+
+## 报告与可观测性
+
+- `artifacts/case-results.json` 除 case 列表外，包含：
+  - `suite_teardown_failed`
+  - `suite_teardown_error_message`
+  - `suite_teardown_failure_type`
+- 步骤级结果包含关键诊断元数据：
+  - `failure_type`、`call_chain`
+  - `duration_ms`
+  - `retry_attempt` / `retry_max_retries`
+  - `case_attempt` / `case_max_retries`
+  - `retry_trace`
+  - `resolved_locator`
+  - `current_url`
+- Allure 增强：
+  - `executor-summary.json` 汇总
+  - 步骤级状态、失败类型与诊断字段
+  - 附件：失败截图、`runtime.log`、DSL 片段
+  - `environment.properties`：`browser` / `headless` / `python` / `version`
 
 ## 执行控制增强（Execution Control）
 
@@ -53,63 +99,11 @@ uv run webtest-framework examples/cases/login.xml --config examples/config/runti
 - `--run-empty-suite`：当筛选后无可执行 case 时，按成功退出并产出空 `case-results.json`。
 - `--merge-results <file1,file2[,fileN]>`：合并多个 case 结果文件；同名 case 以后输入覆盖前者。
 
-示例：
+## 示例用例
 
-```bash
-# 标签表达式过滤
-uv run webtest-framework examples/cases/login.xml --include-tag-expr "smoke AND NOT flaky"
-
-# 失败重跑（可与标签过滤组合）
-uv run webtest-framework examples/cases/login.xml --rerunfailed artifacts/case-results.json --exclude-tag-expr flaky
-
-# 空套件按成功处理
-uv run webtest-framework examples/cases/login.xml --include-tag-expr regression --run-empty-suite
-
-# 结果合并（后者覆盖前者）
-uv run webtest-framework --merge-results artifacts/first.json,artifacts/second.json
-```
-
-## DSL 示例
-
-YAML：
-
-```yaml
-name: sample-suite
-cases:
-  - name: login-smoke
-    tags: [smoke, auth]
-    steps:
-      - action: open
-        target: https://example.com/login
-      - action: type
-        target: css=#username
-        value: demo
-      - action: type
-        target: css=#password
-        value: secret
-      - action: click
-        target: css=button[type=submit]
-```
-
-JSON：
-
-```json
-{
-  "name": "sample-suite",
-  "cases": [
-    {
-      "name": "login-smoke",
-      "tags": ["smoke", "auth"],
-      "steps": [
-        { "action": "open", "target": "https://example.com/login" },
-        { "action": "type", "target": "css=#username", "value": "demo" },
-        { "action": "type", "target": "css=#password", "value": "secret" },
-        { "action": "click", "target": "css=button[type=submit]" }
-      ]
-    }
-  ]
-}
-```
+- `examples/cases/login.xml`：原始登录示例（保持兼容）。
+- `examples/cases/keyword_lifecycle.xml`：关键词 + 生命周期 + 变量 + 重试/容错。
+- `examples/cases/web_actions_extended.xml`：扩展 Web 动作与超时语法示例。
 
 ## 目录结构
 

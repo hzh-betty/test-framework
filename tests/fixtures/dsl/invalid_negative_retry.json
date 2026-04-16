@@ -1,0 +1,12 @@
+{
+  "name": "SmokeSuite",
+  "cases": [
+    {
+      "name": "Login success",
+      "retry": -1,
+      "steps": [
+        {"action": "open", "target": "https://example.test/login"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suite name="BooleanVariantsSuite">
+  <case name="Case true" continue_on_failure="true">
+    <step action="open" target="https://example.test/true" continue_on_failure="true" />
+  </case>
+  <case name="Case one" continue_on_failure="1">
+    <step action="open" target="https://example.test/one" continue_on_failure="1" />
+  </case>
+  <case name="Case false" continue_on_failure="false">
+    <step action="open" target="https://example.test/false" continue_on_failure="false" />
+  </case>
+  <case name="Case zero" continue_on_failure="0">
+    <step action="open" target="https://example.test/zero" continue_on_failure="0" />
+  </case>
+</suite>

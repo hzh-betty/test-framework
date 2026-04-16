@@ -1,0 +1,24 @@
+{
+  "name": "SmokeSuite",
+  "variables": {
+    "base_url": "https://example.test",
+    "username": "suite-user"
+  },
+  "keywords": {
+    "login": [
+      {"action": "open", "target": "${base_url}/login"},
+      {"action": "type", "target": "id=username", "value": "${username}"}
+    ],
+    "submit-login": [
+      {"call": "login"},
+      {"action": "click", "target": "id=submit"}
+    ]
+  },
+  "cases": [
+    {
+      "name": "Login success",
+      "variables": {"username": "case-user"},
+      "steps": [{"call": "submit-login"}]
+    }
+  ]
+}

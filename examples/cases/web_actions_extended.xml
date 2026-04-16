@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suite name="WebActionsExtendedSuite">
+  <case name="Form and wait actions">
+    <step action="open" target="https://example.test/login" />
+    <step action="wait_visible" target="id=username" value="8" />
+    <step action="wait_clickable" target="id=submit" value="8" />
+    <step action="type" target="id=username" value="demo" />
+    <step action="type" target="id=password" value="demo-pass" />
+    <step action="wait_text" target="id=status" value="Ready|timeout=6" />
+    <step action="wait_url_contains" target="/login" value="6" />
+    <step action="assert_element_visible" target="id=submit" value="6" />
+    <step action="assert_element_contains" target="id=title" value="Welcome" />
+    <step action="select" target="id=country" value="China" />
+    <step action="hover" target="id=profile-menu" />
+    <step action="screenshot" target="artifacts/actions-form.png" />
+  </case>
+
+  <case name="Context and upload actions" continue_on_failure="true">
+    <step action="open" target="https://example.test/dashboard" />
+    <step action="switch_frame" target="default" />
+    <step action="switch_window" target="0" />
+    <step action="accept_alert" target="alert" value="5" />
+    <step action="upload_file" target="id=upload" value="README.md" continue_on_failure="true" />
+    <step action="screenshot" target="artifacts/actions-context.png" />
+  </case>
+</suite>
