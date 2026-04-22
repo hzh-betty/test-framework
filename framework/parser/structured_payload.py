@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from framework.dsl.models import CaseSpec, StepSpec, SuiteSpec
+from framework.dsl.models import CaseSpec, Scalar, StepSpec, SuiteSpec
 
 _ROOT_ALLOWED_KEYS = {"name", "cases", "setup", "teardown", "variables", "keywords"}
 _CASE_ALLOWED_KEYS = {
@@ -16,13 +16,12 @@ _CASE_ALLOWED_KEYS = {
     "continue_on_failure",
 }
 _STEP_ALLOWED_KEYS = {
-    "action",
-    "target",
-    "value",
+    "keyword",
+    "args",
+    "kwargs",
     "timeout",
     "retry",
     "continue_on_failure",
-    "call",
 }
 
 
@@ -88,24 +87,9 @@ def _build_step_from_mapping(payload: object, source: str, path: str) -> StepSpe
     step_data = _require_mapping(payload, source, path)
     _require_allowed_keys(step_data, _STEP_ALLOWED_KEYS, source, path)
 
-    if "call" in step_data:
-        if any(key in step_data for key in ("action", "target", "value", "timeout")):
-            _raise_value_error(
-                source,
-                f"{path}.call",
-                "cannot be combined with action/target/value/timeout",
-            )
-        action = "call"
-        target = _require_string(step_data, "call", source, path)
-    else:
-        action = _require_string(step_data, "action", source, path)
-        target = _require_optional_string(step_data, "target", source, path)
-
-    value: str | None = None
-    if "call" in step_data and "value" in step_data:
-        _raise_value_error(source, f"{path}.value", "is not supported for call steps")
-    if "value" in step_data:
-        value = _require_string(step_data, "value", source, path)
+    keyword = _require_string(step_data, "keyword", source, path)
+    args = _require_optional_scalar_list(step_data, "args", source, path)
+    kwargs = _require_optional_scalar_mapping(step_data, "kwargs", source, path)
     timeout = _require_optional_scalar(step_data, "timeout", source, path)
     retry = _require_optional_integer(step_data, "retry", source, path)
     continue_on_failure = _require_optional_boolean(
@@ -116,9 +100,9 @@ def _build_step_from_mapping(payload: object, source: str, path: str) -> StepSpe
     )
 
     return StepSpec(
-        action=action,
-        target=target,
-        value=value,
+        keyword=keyword,
+        args=args,
+        kwargs=kwargs,
         timeout=timeout,
         retry=retry,
         continue_on_failure=continue_on_failure,
@@ -225,13 +209,53 @@ def _require_optional_string(
 
 def _require_optional_scalar(
     data: Mapping[str, object], key: str, source: str, path: str
-) -> str | int | float | None:
+) -> Scalar | None:
     if key not in data:
         return None
     value = data[key]
-    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-        _raise_value_error(source, f"{path}.{key}", "expected a string or number")
+    if not isinstance(value, (str, int, float, bool)):
+        _raise_value_error(source, f"{path}.{key}", "expected a scalar")
     return value
+
+
+def _require_optional_scalar_list(
+    data: Mapping[str, object],
+    key: str,
+    source: str,
+    path: str,
+) -> list[Scalar]:
+    if key not in data:
+        return []
+    value = data[key]
+    if not isinstance(value, list):
+        _raise_value_error(source, f"{path}.{key}", "expected a list")
+    normalized: list[Scalar] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, (str, int, float, bool)):
+            _raise_value_error(source, f"{path}.{key}[{index}]", "expected a scalar")
+        normalized.append(item)
+    return normalized
+
+
+def _require_optional_scalar_mapping(
+    data: Mapping[str, object],
+    key: str,
+    source: str,
+    path: str,
+) -> dict[str, Scalar]:
+    if key not in data:
+        return {}
+    value = data[key]
+    if not isinstance(value, Mapping):
+        _raise_value_error(source, f"{path}.{key}", "expected a mapping")
+    normalized: dict[str, Scalar] = {}
+    for item_key, item in value.items():
+        if not isinstance(item_key, str):
+            _raise_value_error(source, f"{path}.{key}", "expected mapping keys to be strings")
+        if not isinstance(item, (str, int, float, bool)):
+            _raise_value_error(source, f"{path}.{key}.{item_key}", "expected a scalar")
+        normalized[item_key] = item
+    return normalized
 
 
 def _require_optional_integer(

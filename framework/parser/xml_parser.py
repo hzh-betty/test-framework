@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from framework.dsl.models import CaseSpec, StepSpec, SuiteSpec
+from framework.dsl.models import CaseSpec, Scalar, StepSpec, SuiteSpec
 from framework.dsl.xml_schema import validate_xml_case_file
 
 
@@ -115,15 +115,32 @@ class XmlCaseParser:
 
     def _build_step(self, step: ET.Element) -> StepSpec:
         return StepSpec(
-            action=step.attrib["action"],
-            target=step.attrib.get("target"),
-            value=step.attrib.get("value"),
+            keyword=step.attrib["keyword"],
+            args=self._parse_args(step),
+            kwargs=self._parse_kwargs(step),
             timeout=step.attrib.get("timeout"),
             retry=self._parse_optional_int(step.attrib.get("retry")),
             continue_on_failure=self._parse_optional_bool(
                 step.attrib.get("continue_on_failure")
             ),
         )
+
+    def _parse_args(self, step: ET.Element) -> list[Scalar]:
+        return [self._parse_scalar(arg.attrib.get("value", arg.text or "")) for arg in step.findall("arg")]
+
+    def _parse_kwargs(self, step: ET.Element) -> dict[str, Scalar]:
+        kwargs: dict[str, Scalar] = {}
+        for kwarg in step.findall("kwarg"):
+            name = kwarg.attrib["name"].strip()
+            if not name:
+                raise ValueError("XML step kwarg name must not be empty.")
+            if name in kwargs:
+                raise ValueError(f"Duplicate XML step kwarg '{name}'.")
+            kwargs[name] = self._parse_scalar(kwarg.attrib.get("value", kwarg.text or ""))
+        return kwargs
+
+    def _parse_scalar(self, value: str) -> Scalar:
+        return value
 
     def _parse_optional_int(self, value: str | None) -> int | None:
         if value is None:

@@ -73,7 +73,7 @@ class TestParserLayer(unittest.TestCase):
     def test_json_parser_raises_on_type_mismatch_fixture(self):
         with self.assertRaisesRegex(
             ValueError,
-            r"invalid_type\.json \$\.cases\[0\]\.steps\[0\]\.target: expected a string",
+            r"invalid_type\.json \$\.cases\[0\]\.steps\[0\]\.args\[0\]: expected a scalar",
         ):
             JsonCaseParser().parse(FIXTURES / "invalid_type.json")
 
@@ -213,28 +213,22 @@ class TestParserLayer(unittest.TestCase):
         suite = YamlCaseParser().parse(FIXTURES / "valid_case_keywords.yaml")
 
         self.assertIn("login", suite.keywords)
-        self.assertEqual(suite.keywords["submit-login"][0].action, "call")
-        self.assertEqual(suite.keywords["submit-login"][0].target, "login")
-        self.assertEqual(suite.cases[0].steps[0].action, "call")
-        self.assertEqual(suite.cases[0].steps[0].target, "submit-login")
+        self.assertEqual(suite.keywords["submit-login"][0].keyword, "login")
+        self.assertEqual(suite.cases[0].steps[0].keyword, "submit-login")
 
     def test_json_parser_parses_keywords_and_call_steps(self):
         suite = JsonCaseParser().parse(FIXTURES / "valid_case_keywords.json")
 
         self.assertIn("login", suite.keywords)
-        self.assertEqual(suite.keywords["submit-login"][0].action, "call")
-        self.assertEqual(suite.keywords["submit-login"][0].target, "login")
-        self.assertEqual(suite.cases[0].steps[0].action, "call")
-        self.assertEqual(suite.cases[0].steps[0].target, "submit-login")
+        self.assertEqual(suite.keywords["submit-login"][0].keyword, "login")
+        self.assertEqual(suite.cases[0].steps[0].keyword, "submit-login")
 
     def test_xml_parser_parses_keywords_and_call_steps(self):
         suite = XmlCaseParser().parse(FIXTURES / "valid_case_keywords.xml")
 
         self.assertIn("login", suite.keywords)
-        self.assertEqual(suite.keywords["submit-login"][0].action, "call")
-        self.assertEqual(suite.keywords["submit-login"][0].target, "login")
-        self.assertEqual(suite.cases[0].steps[0].action, "call")
-        self.assertEqual(suite.cases[0].steps[0].target, "submit-login")
+        self.assertEqual(suite.keywords["submit-login"][0].keyword, "login")
+        self.assertEqual(suite.cases[0].steps[0].keyword, "submit-login")
 
     def test_xml_parser_parses_timeout_and_optional_target(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -243,7 +237,7 @@ class TestParserLayer(unittest.TestCase):
                 """<?xml version="1.0" encoding="UTF-8"?>
 <suite name="TimeoutSuite">
   <case name="Alert">
-    <step action="accept_alert" timeout="500ms" />
+    <step keyword="Accept Alert" timeout="500ms" />
   </case>
 </suite>
 """,
@@ -266,7 +260,7 @@ name: TimeoutSuite
 cases:
   - name: Alert
     steps:
-      - action: accept_alert
+      - keyword: Accept Alert
         timeout: 2s
 """,
                 encoding="utf-8",
