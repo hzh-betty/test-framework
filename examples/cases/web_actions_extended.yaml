@@ -1,6 +1,11 @@
 name: WebActionsExtendedSuite
 cases:
   - name: Form and wait actions
+    module: auth
+    type: ui
+    priority: p0
+    owner: qa-web
+    tags: smoke,form
     steps:
       - keyword: Open
         args:
@@ -49,6 +54,11 @@ cases:
         args:
           - artifacts/actions-form.png
   - name: Context and upload actions
+    module: file
+    type: ui
+    priority: p1
+    owner: qa-platform
+    tags: regression,upload
     continue_on_failure: true
     steps:
       - keyword: Open

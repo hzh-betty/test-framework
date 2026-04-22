@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <suite name="WebActionsExtendedSuite">
-  <case name="Form and wait actions">
+  <case name="Form and wait actions" module="auth" type="ui" priority="p0" owner="qa-web" tags="smoke,form">
     <step keyword="Open">
       <arg value="https://example.test/login" />
     </step>
@@ -43,7 +43,7 @@
       <arg value="artifacts/actions-form.png" />
     </step>
   </case>
-  <case name="Context and upload actions" continue_on_failure="true">
+  <case name="Context and upload actions" module="file" type="ui" priority="p1" owner="qa-platform" tags="regression,upload" continue_on_failure="true">
     <step keyword="Open">
       <arg value="https://example.test/dashboard" />
     </step>

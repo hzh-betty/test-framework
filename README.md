@@ -1,6 +1,6 @@
 # test-framework
 
-基于 **Python + uv + Selenium** 的分层 Web 自动化测试框架，支持 DSL 用例导入、执行、日志、Allure 报告与通知扩展。
+基于 **Python + uv + Selenium** 的分层 Web 自动化测试框架，支持关键字 DSL、CI 模板、用例治理、执行统计、Allure 报告与多渠道通知。
 
 ## 架构分层
 
@@ -10,9 +10,9 @@
 ├── 执行引擎（Executor）
 ├── Selenium封装层
 ├── Page Object层
-├── 报告模块（Allure）
+├── 报告模块（Allure / statistics）
 ├── 日志模块
-└── 通知模块（邮件/钉钉）
+└── 通知模块（邮件/钉钉/企业微信/飞书）
 ```
 
 ## 快速开始
@@ -28,6 +28,9 @@ uv run webtest-framework examples/cases/keyword_lifecycle.xml --config examples/
 
 # 扩展 Web 关键字示例（支持并行参数）
 uv run webtest-framework examples/cases/web_actions_extended.yaml --config examples/config/runtime.yaml --workers 2 --headless
+
+# 生成统计并按 runtime.yaml 配置通知
+uv run webtest-framework examples/cases/web_actions_extended.yaml --config examples/config/runtime.yaml --dry-run --stats-output artifacts/statistics.json --notify
 ```
 
 > 提示：示例中的 URL / 定位符（如 `https://example.test`、`id=...`）为演示占位符，请替换为你的目标系统实际地址与元素定位。
@@ -48,6 +51,7 @@ uv run webtest-framework examples/cases/web_actions_extended.yaml --config examp
   - XML：`<step keyword="Type Text"><arg value="id=username" /><arg value="demo" /></step>`
 - 支持用户复合关键字（`keywords`），调用时直接把用户关键字名写到 `keyword`。
 - 支持步骤级 `timeout` 字段/属性，等待动作可写 `timeout="500ms"`、`timeout="2s"`、`timeout="1 minute"`；未提供时默认 10 秒。
+- 支持用例元数据：`module`、`type`、`priority`、`owner`，未声明时统计归入 `unassigned`。
 - 支持标签与筛选：`tags`、`--include-tag-expr`、`--exclude-tag-expr`。
 - `--dry-run` 只执行解析、变量替换、关键字查找、参数绑定、类型转换、定位器和 timeout 校验，不启动 WebDriver。
 
@@ -100,8 +104,24 @@ uv run webtest-framework examples/cases/web_actions_extended.yaml --config examp
 - `--include-tag-expr "<expr>"`：仅执行匹配标签表达式的 case（支持 `AND` / `OR` / `NOT` / 括号）。
 - `--exclude-tag-expr "<expr>"`：排除匹配标签表达式的 case。
 - `--rerunfailed <case-results.json>`：从历史结果中读取失败 case 名称，仅重跑失败用例。
+- `--module` / `--case-type` / `--priority` / `--owner`：按元数据筛选，支持重复传参和逗号分隔多值。
 - `--run-empty-suite`：当筛选后无可执行 case 时，按成功退出并产出空 `case-results.json`。
 - `--merge-results <file1,file2[,fileN]>`：合并多个 case 结果文件；同名 case 以后输入覆盖前者。
+
+## CI、部署与通知
+
+- 仓库提供 `.github/workflows/webtest.yml`、`.gitlab-ci.yml`、`Jenkinsfile` 模板，流程为 checkout、`uv sync --dev`、dry-run、可选部署、正式执行、归档 `artifacts`。
+- `runtime.yaml` 的 `pipeline.deploy.commands` 定义部署命令；只有 CLI 显式传入 `--deploy` 才会执行，避免本地误触发。
+- `runtime.yaml` 支持 `${ENV_NAME}` 环境变量替换，适合保存 SMTP 密码和 webhook URL。
+- `--notify` 使用 `notifications.channels` 调度邮件、钉钉、企业微信、飞书；每个渠道支持 `enabled`、`trigger: always|on_failure|on_success`、`retries`。
+- 兼容旧入口：`--notify-email` 和 `--notify-dingtalk` 仍可直接使用顶层 `smtp`、`dingtalk_webhook`。
+
+## 多维统计
+
+- 默认生成 `artifacts/statistics.json`，可通过 `--stats-output` 改写输出路径。
+- 统计维度包括 `overall`、`module`、`type`、`priority`、`owner`、`tag`。
+- 每个维度包含 `total`、`passed`、`failed`、`pass_rate`、`failed_cases`。
+- `--merge-results` 后会基于合并结果重新生成统计，同名 case 以后输入覆盖前者。
 
 ## 示例用例
 
