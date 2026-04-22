@@ -1,5 +1,7 @@
 import unittest
 from dataclasses import dataclass
+import tempfile
+from pathlib import Path
 import threading
 import time
 
@@ -29,7 +31,8 @@ class FakePage:
         self.calls.append(("wait_visible", locator, timeout))
 
     def screenshot(self, path: str):
-        self.calls.append(("screenshot", path))
+        if "/screenshots/" not in path:
+            self.calls.append(("screenshot", path))
 
     def wait_clickable(self, locator: str, timeout: int = 10):
         self.calls.append(("wait_clickable", locator, timeout))
@@ -63,6 +66,59 @@ class FakePage:
 
     def upload_file(self, locator: str, file_path: str):
         self.calls.append(("upload_file", locator, file_path))
+
+    def clear(self, locator: str):
+        self.calls.append(("clear", locator))
+
+    def wait_not_visible(self, locator: str, timeout: float = 10):
+        self.calls.append(("wait_not_visible", locator, timeout))
+
+    def wait_gone(self, locator: str, timeout: float = 10):
+        self.calls.append(("wait_gone", locator, timeout))
+
+    def assert_url_contains(self, fragment: str):
+        self.calls.append(("assert_url_contains", fragment))
+
+    def assert_title_contains(self, expected: str):
+        self.calls.append(("assert_title_contains", expected))
+
+    def new_browser(self, alias: str = "default"):
+        self.calls.append(("new_browser", alias))
+
+    def switch_browser(self, alias: str):
+        self.calls.append(("switch_browser", alias))
+
+    def close_browser(self, alias: str | None = None):
+        self.calls.append(("close_browser", alias))
+
+
+class DiagnosticDriver:
+    current_url = "https://example.test/login"
+    title = "Login"
+    page_source = "<html><body>Login</body></html>"
+
+
+class DiagnosticActions:
+    def __init__(self):
+        self.driver = DiagnosticDriver()
+        self.current_alias = "admin"
+
+
+class DiagnosticPage(FakePage):
+    def __init__(self, calls: list[tuple], root: Path):
+        super().__init__(calls)
+        self.actions = DiagnosticActions()
+        self.root = root
+
+    def assert_text(self, locator: str, expected: str):
+        super().assert_text(locator, expected)
+        raise AssertionError("text mismatch")
+
+    def screenshot(self, path: str):
+        self.calls.append(("screenshot", path))
+        screenshot = Path(path)
+        screenshot.parent.mkdir(parents=True, exist_ok=True)
+        screenshot.write_bytes(b"fake-png")
 
 
 class TestExecutorEngine(unittest.TestCase):
@@ -135,7 +191,7 @@ class TestExecutorEngine(unittest.TestCase):
         result = executor.run_suite(suite)
 
         self.assertEqual(result.failed_cases, 1)
-        self.assertIn("Unsupported action", result.case_results[0].error_message)
+        self.assertIn("Unknown action", result.case_results[0].error_message)
 
     def test_extended_actions_are_dispatched_to_page_layer(self):
         calls: list[tuple] = []
@@ -190,7 +246,7 @@ class TestExecutorEngine(unittest.TestCase):
             ],
         )
 
-    def test_wait_text_supports_inline_timeout_override(self):
+    def test_wait_text_does_not_parse_legacy_inline_timeout_suffix(self):
         calls: list[tuple] = []
         suite = SuiteSpec(
             name="Smoke",
@@ -212,7 +268,100 @@ class TestExecutorEngine(unittest.TestCase):
         result = executor.run_suite(suite)
 
         self.assertEqual(result.failed_cases, 0)
-        self.assertEqual(calls, [("wait_text", "id=status", "Done", 7)])
+        self.assertEqual(calls, [("wait_text", "id=status", "Done|timeout=7", 10.0)])
+
+    def test_timeout_field_is_dispatched_to_wait_action(self):
+        calls: list[tuple] = []
+        suite = SuiteSpec(
+            name="Smoke",
+            cases=[
+                CaseSpec(
+                    name="TimeoutField",
+                    steps=[
+                        StepSpec(
+                            action="Wait Visible",
+                            target="id=status",
+                            timeout="500ms",
+                        )
+                    ],
+                )
+            ],
+        )
+        executor = Executor(page_factory=lambda: FakePage(calls))
+
+        result = executor.run_suite(suite)
+
+        self.assertEqual(result.failed_cases, 0)
+        self.assertEqual(calls, [("wait_visible", "id=status", 0.5)])
+
+    def test_new_stable_core_actions_are_dispatched(self):
+        calls: list[tuple] = []
+        suite = SuiteSpec(
+            name="Smoke",
+            cases=[
+                CaseSpec(
+                    name="StableActions",
+                    steps=[
+                        StepSpec(action="clear", target="id=query"),
+                        StepSpec(action="wait_not_visible", target="id=spinner", timeout="2s"),
+                        StepSpec(action="wait_gone", target="id=toast", timeout="2s"),
+                        StepSpec(action="assert_url_contains", target="/dashboard"),
+                        StepSpec(action="assert_title_contains", target="Dashboard"),
+                        StepSpec(action="new_browser", target="admin"),
+                        StepSpec(action="switch_browser", target="admin"),
+                        StepSpec(action="close_browser", target="admin"),
+                    ],
+                )
+            ],
+        )
+        executor = Executor(page_factory=lambda: FakePage(calls))
+
+        result = executor.run_suite(suite)
+
+        self.assertEqual(result.failed_cases, 0)
+        self.assertEqual(
+            calls,
+            [
+                ("clear", "id=query"),
+                ("wait_not_visible", "id=spinner", 2.0),
+                ("wait_gone", "id=toast", 2.0),
+                ("assert_url_contains", "/dashboard"),
+                ("assert_title_contains", "Dashboard"),
+                ("new_browser", "admin"),
+                ("switch_browser", "admin"),
+                ("close_browser", "admin"),
+            ],
+        )
+
+    def test_failed_step_records_browser_diagnostics_and_artifacts(self):
+        calls: list[tuple] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            suite = SuiteSpec(
+                name="Smoke",
+                cases=[
+                    CaseSpec(
+                        name="Login Failure",
+                        steps=[StepSpec(action="assert_text", target="id=title", value="FAIL")],
+                    )
+                ],
+            )
+            executor = Executor(
+                page_factory=lambda: DiagnosticPage(calls, root),
+                screenshot_dir=str(root / "screenshots"),
+                page_source_dir=str(root / "page-source"),
+            )
+
+            result = executor.run_suite(suite)
+            step = result.case_results[0].step_results[0]
+
+            self.assertEqual(result.failed_cases, 1)
+            self.assertEqual(step.browser_alias, "admin")
+            self.assertEqual(step.page_title, "Login")
+            self.assertIsNotNone(step.screenshot_path)
+            self.assertIsNotNone(step.page_source_path)
+            self.assertTrue(Path(step.screenshot_path).exists())
+            self.assertTrue(Path(step.page_source_path).exists())
 
     def test_parse_wait_text_value_rejects_empty_timeout_suffix(self):
         executor = Executor(page_factory=lambda: FakePage([]))
