@@ -48,7 +48,7 @@ class TestAllureArtifactsFlow(unittest.TestCase):
             report_dir = tmp / "allure-report"
             xml_file = tmp / "case.xml"
             xml_file.write_text(
-                "<suite name='Smoke'><case name='Login'><step action='open' target='https://example.test' /></case></suite>",
+                """<suite name="Smoke"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>""",
                 encoding="utf-8",
             )
             suite_result = SuiteExecutionResult(

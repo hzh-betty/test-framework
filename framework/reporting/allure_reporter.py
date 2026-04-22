@@ -92,7 +92,11 @@ class AllureReporter:
 
     def _build_step_payload(self, step) -> dict:
         chain = " > ".join(step.call_chain) if getattr(step, "call_chain", None) else ""
-        name = f"{step.action} {step.target}"
+        arguments = getattr(step, "arguments", []) or []
+        argument_text = " ".join(str(argument) for argument in arguments)
+        name = getattr(step, "keyword_name", getattr(step, "action", "step"))
+        if argument_text:
+            name = f"{name} {argument_text}"
         if chain:
             name = f"[{chain}] {name}"
         diagnostics = self._build_step_diagnostics(step)
@@ -127,6 +131,11 @@ class AllureReporter:
         diagnostics: dict[str, object] = {}
         if getattr(step, "duration_ms", None) is not None:
             diagnostics["duration_ms"] = step.duration_ms
+        if getattr(step, "keyword_source", None) is not None:
+            diagnostics["keyword_source"] = step.keyword_source
+        diagnostics["dry_run"] = bool(getattr(step, "dry_run", False))
+        if getattr(step, "arguments", None):
+            diagnostics["arguments"] = step.arguments
         if getattr(step, "retry_attempt", None) is not None:
             diagnostics["retry_attempt"] = step.retry_attempt
         if getattr(step, "retry_max_retries", None) is not None:

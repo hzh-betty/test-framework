@@ -133,10 +133,16 @@ def _to_case_result(case: dict) -> CaseExecutionResult:
 def _to_step_result(step: dict) -> StepExecutionResult:
     if not isinstance(step, dict):
         raise ValueError("step result item must be an object")
-    action = step.get("action")
-    target = step.get("target")
-    if not isinstance(action, str) or not isinstance(target, str):
-        raise ValueError("step result must include string action and target")
+    keyword_name = step.get("keyword_name", step.get("action"))
+    arguments = step.get("arguments")
+    if arguments is None and step.get("target") is not None:
+        arguments = [step.get("target")]
+    if arguments is None:
+        arguments = []
+    if not isinstance(keyword_name, str):
+        raise ValueError("step result must include string keyword_name")
+    if not isinstance(arguments, list):
+        raise ValueError('step "arguments" must be a list when provided')
     passed = step.get("passed")
     if not isinstance(passed, bool):
         raise ValueError(f'step "passed" must be a bool, got {type(passed).__name__}')
@@ -158,9 +164,22 @@ def _to_step_result(step: dict) -> StepExecutionResult:
     retry_trace = _to_retry_trace(step.get("retry_trace"))
     resolved_locator = _to_resolved_locator(step.get("resolved_locator"))
     current_url = _to_optional_string(step.get("current_url"), "current_url")
+    screenshot_path = _to_optional_string(step.get("screenshot_path"), "screenshot_path")
+    page_source_path = _to_optional_string(step.get("page_source_path"), "page_source_path")
+    browser_alias = _to_optional_string(step.get("browser_alias"), "browser_alias")
+    page_title = _to_optional_string(step.get("page_title"), "page_title")
+    keyword_source = _to_optional_string(step.get("keyword_source"), "keyword_source")
+    dry_run = step.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        raise ValueError('step "dry_run" must be a bool when provided')
+    diagnostics = step.get("diagnostics") or {}
+    if not isinstance(diagnostics, dict):
+        raise ValueError('step "diagnostics" must be an object when provided')
     return StepExecutionResult(
-        action=action,
-        target=target,
+        keyword_name=keyword_name,
+        arguments=arguments,
+        keyword_source=keyword_source,
+        dry_run=dry_run,
         passed=passed,
         error_message=step.get("error_message"),
         call_chain=call_chain,
@@ -173,16 +192,21 @@ def _to_step_result(step: dict) -> StepExecutionResult:
         retry_trace=retry_trace,
         resolved_locator=resolved_locator,
         current_url=current_url,
+        screenshot_path=screenshot_path,
+        page_source_path=page_source_path,
+        browser_alias=browser_alias,
+        page_title=page_title,
+        diagnostics=diagnostics,
     )
 
 
 def _to_failure_type(value: object) -> FailureType | None:
     if value is None:
         return None
-    if value in {"action", "assertion", "timeout", "unknown"}:
+    if value in {"action", "assertion", "browser_session", "locator", "timeout", "unknown"}:
         return value
     raise ValueError(
-        f'failure_type must be one of "action", "assertion", "timeout", "unknown"; '
+        f'failure_type must be one of "action", "assertion", "browser_session", "locator", "timeout", "unknown"; '
         f"got {value!r}"
     )
 
