@@ -1,45 +1,63 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <suite name="KeywordLifecycleSuite">
   <variables>
     <var name="base_url" value="https://example.test" />
     <var name="username" value="suite-user" />
     <var name="password" value="demo-pass" />
   </variables>
-
   <keywords>
     <keyword name="open-login-page">
-      <step action="open" target="${base_url}/login" />
-      <step action="wait_visible" target="id=username" value="10" />
+      <step keyword="Open">
+        <arg value="${base_url}/login" />
+      </step>
+      <step keyword="Wait Visible">
+        <arg value="id=username" />
+        <arg value="10" />
+      </step>
     </keyword>
     <keyword name="fill-credentials">
-      <step action="type" target="id=username" value="${username}" />
-      <step action="type" target="id=password" value="${password}" />
+      <step keyword="Type Text">
+        <arg value="id=username" />
+        <arg value="${username}" />
+      </step>
+      <step keyword="Type Text">
+        <arg value="id=password" />
+        <arg value="${password}" />
+      </step>
     </keyword>
     <keyword name="submit-login">
-      <step action="call" target="fill-credentials" />
-      <step action="click" target="id=submit" retry="1" />
+      <step keyword="fill-credentials" />
+      <step retry="1" keyword="Click">
+        <arg value="id=submit" />
+      </step>
     </keyword>
   </keywords>
-
   <setup>
-    <step action="screenshot" target="artifacts/keyword-suite-start.png" />
+    <step keyword="Screenshot">
+      <arg value="artifacts/keyword-suite-start.png" />
+    </step>
   </setup>
-
   <case name="Keyword lifecycle flow" tags="smoke,keywords" retry="1" continue_on_failure="true">
     <variables>
       <var name="username" value="case-user" />
     </variables>
     <setup>
-      <step action="call" target="open-login-page" />
+      <step keyword="open-login-page" />
     </setup>
-    <step action="call" target="submit-login" />
-    <step action="wait_text" target="id=welcome" value="Welcome ${username}" timeout="7s" continue_on_failure="true" />
+    <step keyword="submit-login" />
+    <step timeout="7s" continue_on_failure="true" keyword="Wait Text">
+      <arg value="id=welcome" />
+      <arg value="Welcome ${username}" />
+    </step>
     <teardown>
-      <step action="screenshot" target="artifacts/keyword-case-end.png" />
+      <step keyword="Screenshot">
+        <arg value="artifacts/keyword-case-end.png" />
+      </step>
     </teardown>
   </case>
-
   <teardown>
-    <step action="screenshot" target="artifacts/keyword-suite-end.png" />
+    <step keyword="Screenshot">
+      <arg value="artifacts/keyword-suite-end.png" />
+    </step>
   </teardown>
 </suite>

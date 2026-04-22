@@ -191,7 +191,7 @@ class TestExecutorEngine(unittest.TestCase):
         result = executor.run_suite(suite)
 
         self.assertEqual(result.failed_cases, 1)
-        self.assertIn("Unknown action", result.case_results[0].error_message)
+        self.assertIn("Unknown keyword", result.case_results[0].error_message)
 
     def test_extended_actions_are_dispatched_to_page_layer(self):
         calls: list[tuple] = []
@@ -617,12 +617,12 @@ class TestExecutorEngine(unittest.TestCase):
 
         self.assertEqual(result.failed_cases, 1)
         case_result = result.case_results[0]
-        self.assertIn("Keyword 'missing' is not defined.", case_result.error_message)
+        self.assertIn("Unknown keyword 'missing'", case_result.error_message)
         self.assertIn("call_chain: wrapper", case_result.error_message)
         failed_missing_step = next(
             step
             for step in case_result.step_results
-            if step.action == "call" and step.target == "missing"
+            if step.keyword_name == "missing"
         )
         self.assertFalse(failed_missing_step.passed)
         self.assertEqual(failed_missing_step.call_chain, ["wrapper"])
@@ -649,7 +649,7 @@ class TestExecutorEngine(unittest.TestCase):
         self.assertEqual(result.failed_cases, 1)
         case_result = result.case_results[0]
         self.assertIn(
-            "Undefined variable 'username' in step value",
+            "Undefined variable 'username' in step args",
             case_result.error_message,
         )
         self.assertIn("call_chain: fill-username", case_result.error_message)

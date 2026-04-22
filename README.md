@@ -20,14 +20,14 @@
 ```bash
 uv sync --dev
 
-# 兼容原有示例
-uv run webtest-framework examples/cases/login.xml --config examples/config/runtime.yaml --headless
+# 关键字 DSL 示例
+uv run webtest-framework examples/cases/web_actions_extended.yaml --config examples/config/runtime.yaml --dry-run
 
-# 关键词/生命周期/变量示例
+# XML 关键字/生命周期/变量示例
 uv run webtest-framework examples/cases/keyword_lifecycle.xml --config examples/config/runtime.yaml --headless
 
-# 扩展 Web 动作示例（支持并行参数）
-uv run webtest-framework examples/cases/web_actions_extended.xml --config examples/config/runtime.yaml --workers 2 --headless
+# 扩展 Web 关键字示例（支持并行参数）
+uv run webtest-framework examples/cases/web_actions_extended.yaml --config examples/config/runtime.yaml --workers 2 --headless
 ```
 
 > 提示：示例中的 URL / 定位符（如 `https://example.test`、`id=...`）为演示占位符，请替换为你的目标系统实际地址与元素定位。
@@ -35,34 +35,35 @@ uv run webtest-framework examples/cases/web_actions_extended.xml --config exampl
 启用 Allure：
 
 ```bash
-uv run webtest-framework examples/cases/login.xml --config examples/config/runtime.yaml --allure
+uv run webtest-framework examples/cases/web_actions_extended.yaml --config examples/config/runtime.yaml --allure --dry-run
 ```
 
 ## DSL 能力（当前实现）
 
 - 支持 suite / case 级 `setup`、`teardown`、`variables`。
 - 支持 case / step 级 `retry`（非负整数）与 `continue_on_failure`（布尔）。
-- 支持变量插值：`\${var}`，可用于 `action` / `target` / `value`。
-- 支持关键词（`keywords`）与调用（`call`）：
-  - XML：`<step action="call" target="keyword-name" />`
-  - YAML/JSON：支持 `call` 简写（如 `- call: login-flow`）。
+- 支持变量插值：`\${var}`，可用于 `keyword` / `args` / `kwargs` / `timeout`。
+- step 统一使用 `keyword`、`args`、`kwargs`、`timeout`：
+  - YAML/JSON：`{keyword: Type Text, args: [id=username, demo]}`
+  - XML：`<step keyword="Type Text"><arg value="id=username" /><arg value="demo" /></step>`
+- 支持用户复合关键字（`keywords`），调用时直接把用户关键字名写到 `keyword`。
 - 支持步骤级 `timeout` 字段/属性，等待动作可写 `timeout="500ms"`、`timeout="2s"`、`timeout="1 minute"`；未提供时默认 10 秒。
 - 支持标签与筛选：`tags`、`--include-tag-expr`、`--exclude-tag-expr`。
+- `--dry-run` 只执行解析、变量替换、关键字查找、参数绑定、类型转换、定位器和 timeout 校验，不启动 WebDriver。
 
-## Selenium 动作（DSL `action`）
+## 内置 Web 关键字
 
-- 基础：`open`、`click`、`type`、`assert_text`、`screenshot`
-- 等待/断言：`wait_visible`、`wait_not_visible`、`wait_gone`、`wait_clickable`、`wait_text`、`wait_url_contains`、`assert_element_visible`、`assert_element_contains`、`assert_url_contains`、`assert_title_contains`
-- 交互扩展：`clear`、`select`、`hover`、`switch_frame`、`switch_window`、`accept_alert`、`upload_file`
-- 浏览器会话：`new_browser`、`switch_browser`、`close_browser`
+- 基础：`Open`、`Click`、`Type Text`、`Clear`、`Assert Text`、`Screenshot`
+- 等待/断言：`Wait Visible`、`Wait Not Visible`、`Wait Gone`、`Wait Clickable`、`Wait Text`、`Wait URL Contains`、`Assert Element Visible`、`Assert Element Contains`、`Assert URL Contains`、`Assert Title Contains`
+- 交互扩展：`Select`、`Hover`、`Switch Frame`、`Switch Window`、`Accept Alert`、`Upload File`
+- 浏览器会话：`New Browser`、`Switch Browser`、`Close Browser`
 
 说明：
-- `wait_visible` / `wait_clickable` / `wait_text` / `wait_url_contains` / `assert_element_visible` / `accept_alert` 使用 `timeout` 控制等待时间。
-- `wait_text` 的 `value` 仅表示期望文本；旧的 `文本|timeout=N` 混合写法已废弃。
+- `Wait Visible` / `Wait Clickable` / `Wait Text` / `Wait URL Contains` / `Assert Element Visible` / `Accept Alert` 使用 `timeout` 控制等待时间。
 - 定位器支持严格前缀：`id`、`name`、`css`、`xpath`、`class`、`tag`、`link`、`partial_link`、`text`、`partial_text`、`testid` / `data-testid`；无前缀默认 CSS。
-- 动作名支持 Robot 风格规范化，例如 `Wait Visible`、`wait-visible`、`wait_visible` 等价。
-- `switch_frame` 支持 `default` / `parent` / 数字索引 / 元素定位符。
-- `switch_window` 支持窗口句柄或数字索引。
+- 关键字名支持 Robot 风格规范化，例如 `Wait Visible`、`wait-visible`、`wait_visible` 等价。
+- `Switch Frame` 支持 `default` / `parent` / 数字索引 / 元素定位符。
+- `Switch Window` 支持窗口句柄或数字索引。
 
 ## 执行控制与并行
 
@@ -80,6 +81,7 @@ uv run webtest-framework examples/cases/login.xml --config examples/config/runti
   - `suite_teardown_error_message`
   - `suite_teardown_failure_type`
 - 步骤级结果包含关键诊断元数据：
+  - `keyword_name`、`arguments`、`keyword_source`、`dry_run`
   - `failure_type`、`call_chain`
   - `duration_ms`
   - `retry_attempt` / `retry_max_retries`
@@ -103,7 +105,8 @@ uv run webtest-framework examples/cases/login.xml --config examples/config/runti
 
 ## 示例用例
 
-- `examples/cases/login.xml`：原始登录示例（保持兼容）。
+- `examples/cases/web_actions_extended.yaml`：关键字 DSL、扩展 Web 动作与超时语法示例。
+- `examples/cases/login.xml`：XML 关键字登录示例。
 - `examples/cases/keyword_lifecycle.xml`：关键词 + 生命周期 + 变量 + 重试/容错。
 - `examples/cases/web_actions_extended.xml`：扩展 Web 动作与超时语法示例。
 
