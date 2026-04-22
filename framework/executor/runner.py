@@ -780,17 +780,21 @@ class Executor:
 
     def _resolve_step_variables(self, step: StepSpec, variables: dict[str, str]) -> StepSpec:
         return StepSpec(
-            action=self._substitute_variables(step.action, variables, "action"),
-            target=(
-                self._substitute_variables(step.target, variables, "target")
-                if step.target is not None
-                else None
-            ),
-            value=(
-                self._substitute_variables(step.value, variables, "value")
-                if step.value is not None
-                else None
-            ),
+            keyword=self._substitute_variables(step.keyword, variables, "keyword"),
+            args=[
+                self._substitute_variables(arg, variables, "args")
+                if isinstance(arg, str)
+                else arg
+                for arg in step.args
+            ],
+            kwargs={
+                key: (
+                    self._substitute_variables(value, variables, f"kwargs.{key}")
+                    if isinstance(value, str)
+                    else value
+                )
+                for key, value in step.kwargs.items()
+            },
             timeout=(
                 self._substitute_variables(str(step.timeout), variables, "timeout")
                 if step.timeout is not None
@@ -814,9 +818,67 @@ class Executor:
 
         return VARIABLE_PATTERN.sub(_replace, raw_value)
 
+    def _build_keyword_registry(self, page: BasePage | _DryRunPage) -> KeywordRegistry:
+        registry = KeywordRegistry()
+        registry.register_library(WebKeywordLibrary(page))
+        for library in self.keyword_libraries:
+            registry.register_library(library)
+        return registry
+
+    def _step_kwargs_with_timeout(
+        self,
+        definition: KeywordDefinition,
+        step: StepSpec,
+    ) -> dict[str, object]:
+        import inspect
+
+        kwargs: dict[str, object] = dict(step.kwargs)
+        if step.timeout is not None and "timeout" not in kwargs:
+            signature = inspect.signature(definition.callable)
+            if "timeout" in signature.parameters:
+                kwargs["timeout"] = step.timeout
+            else:
+                raise ValueError(f"Keyword '{definition.name}' does not accept timeout.")
+        return kwargs
+
+    def _normalize_user_keywords(
+        self,
+        keywords: dict[str, list[StepSpec]],
+    ) -> dict[str, list[StepSpec]]:
+        normalized: dict[str, list[StepSpec]] = {}
+        for name, steps in keywords.items():
+            key = normalize_keyword_name(name)
+            if key in normalized:
+                raise ValueError(f"Duplicate keyword '{name}'.")
+            normalized[key] = steps
+        return normalized
+
+    def _step_arguments(self, step: StepSpec) -> list[object]:
+        arguments: list[object] = list(step.args)
+        for key, value in sorted(step.kwargs.items()):
+            arguments.append({key: value})
+        if step.timeout is not None:
+            arguments.append({"timeout": step.timeout})
+        return arguments
+
+    def _resolve_locator(self, step: StepSpec) -> dict[str, str] | None:
+        if normalize_keyword_name(step.keyword) not in LOCATOR_KEYWORDS:
+            return None
+        raw = step.args[0] if step.args else step.kwargs.get("locator")
+        if not isinstance(raw, str):
+            return None
+        try:
+            locator = Locator.parse(raw)
+        except LocatorError:
+            return None
+        return {"raw": raw, "by": locator.by, "value": locator.value}
+
+    def _elapsed_ms(self, started_at: float) -> int:
+        return max(0, int((time.perf_counter() - started_at) * 1000))
+
     def _capture_failure_screenshot(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         case: CaseSpec,
         step: StepSpec,
     ) -> str:
@@ -826,7 +888,7 @@ class Executor:
 
     def _capture_step_screenshot(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         case_name: str,
         step: StepSpec,
     ) -> str | None:
@@ -837,14 +899,14 @@ class Executor:
             if self.logger and hasattr(self.logger, "error"):
                 self.logger.error(
                     f"screenshot_capture_failed case={case_name} "
-                    f"action={step.action} error={exc}"
+                    f"keyword={step.keyword} error={exc}"
                 )
             return None
         return screenshot
 
     def _capture_page_source(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         case_name: str,
         step: StepSpec,
     ) -> str | None:
@@ -860,7 +922,7 @@ class Executor:
             if self.logger and hasattr(self.logger, "error"):
                 self.logger.error(
                     f"page_source_capture_failed case={case_name} "
-                    f"action={step.action} error={exc}"
+                    f"keyword={step.keyword} error={exc}"
                 )
             return None
         return str(path)
@@ -873,51 +935,30 @@ class Executor:
         extension: str,
     ) -> str:
         safe_case = self._safe_artifact_name(case_name)
-        safe_action = self._safe_artifact_name(step.action)
-        return str(Path(directory) / f"{safe_case}_{safe_action}_{uuid4().hex}{extension}")
+        safe_keyword = self._safe_artifact_name(step.keyword)
+        return str(Path(directory) / f"{safe_case}_{safe_keyword}_{uuid4().hex}{extension}")
 
     def _safe_artifact_name(self, value: str) -> str:
         normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip().lower())
         return normalized.strip("_") or "artifact"
 
-    def _resolve_current_url(self, page: BasePage) -> str:
+    def _resolve_current_url(self, page: BasePage | _DryRunPage) -> str:
         driver = self._resolve_driver(page)
         current_url = getattr(driver, "current_url", None)
         return current_url if current_url else "unknown"
 
-    def _resolve_page_title(self, page: BasePage) -> str | None:
+    def _resolve_page_title(self, page: BasePage | _DryRunPage) -> str | None:
         title = getattr(self._resolve_driver(page), "title", None)
         return title if isinstance(title, str) else None
 
-    def _resolve_browser_alias(self, page: BasePage) -> str | None:
+    def _resolve_browser_alias(self, page: BasePage | _DryRunPage) -> str | None:
         actions = getattr(page, "actions", None)
         alias = getattr(actions, "current_alias", None)
         return alias if isinstance(alias, str) else None
 
-    def _resolve_driver(self, page: BasePage):
+    def _resolve_driver(self, page: BasePage | _DryRunPage):
         actions = getattr(page, "actions", None)
         return getattr(actions, "driver", None)
-
-    def _parse_wait_text_value(self, raw_value: str) -> tuple[str, int]:
-        timeout_suffix = "|timeout="
-        if timeout_suffix not in raw_value:
-            return raw_value, 10
-
-        expected, timeout_raw = raw_value.rsplit(timeout_suffix, 1)
-        try:
-            timeout = int(timeout_raw)
-        except ValueError as exc:
-            raise ValueError(
-                "Action 'wait_text' timeout must be a positive integer when '|timeout=' is provided."
-            ) from exc
-        if timeout <= 0:
-            raise ValueError(
-                "Action 'wait_text' timeout must be a positive integer when '|timeout=' is provided."
-            )
-        return expected, timeout
-
-    def _run_step(self, page: BasePage, step: StepSpec) -> None:
-        self.action_registry.dispatch(page, step)
 
     def _should_continue_on_failure(
         self,
@@ -931,15 +972,29 @@ class Executor:
             return retry
         return 0
 
+    def _parse_wait_text_value(self, raw_value: str) -> tuple[str, int]:
+        timeout_suffix = "|timeout="
+        if timeout_suffix not in raw_value:
+            return raw_value, 10
+        expected, timeout_raw = raw_value.rsplit(timeout_suffix, 1)
+        try:
+            timeout = int(timeout_raw)
+        except ValueError as exc:
+            raise ValueError("timeout must be a positive integer") from exc
+        if timeout <= 0:
+            raise ValueError("timeout must be a positive integer")
+        return expected, timeout
+
     def _classify_failure(self, exc: Exception, step: StepSpec) -> FailureType:
-        action = step.action.lower()
         if isinstance(exc, (WaitTimeoutError, TimeoutError)) or "timeout" in type(exc).__name__.lower():
             return "timeout"
-        if isinstance(exc, LocatorError):
+        if isinstance(exc, LocatorError) or "locator" in str(exc).lower():
             return "locator"
         if isinstance(exc, BrowserSessionError):
             return "browser_session"
-        if isinstance(exc, (AssertionMismatch, AssertionError)) or action.startswith("assert"):
+        if isinstance(exc, (AssertionMismatch, AssertionError)) or normalize_keyword_name(
+            step.keyword
+        ).startswith("assert"):
             return "assertion"
         if isinstance(exc, ValueError):
             return "action"
@@ -953,28 +1008,28 @@ class Executor:
 
     def _log_case_failure(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         case: CaseSpec,
         outcome: _StepSequenceOutcome,
     ) -> None:
         if not self.logger or outcome.step is None:
             return
         screenshot = outcome.screenshot_path or "unavailable"
-        if screenshot == "unavailable":
+        if screenshot == "unavailable" and not self.dry_run:
             try:
                 screenshot = self._capture_failure_screenshot(page, case, outcome.step)
             except Exception as screenshot_error:
                 if hasattr(self.logger, "error"):
                     self.logger.error(
                         f"screenshot_capture_failed case={case.name} "
-                        f"action={outcome.step.action} error={screenshot_error}"
+                        f"keyword={outcome.step.keyword} error={screenshot_error}"
                     )
         error_message = outcome.error_message or "Case failed."
         if outcome.call_chain:
             error_message = f"{error_message} call_chain={' > '.join(outcome.call_chain)}"
         failure_context = FailureContext(
             url=self._resolve_current_url(page),
-            locator=outcome.step.target,
+            locator=self._first_argument(outcome.step),
             screenshot_path=screenshot,
             error=error_message,
         )
