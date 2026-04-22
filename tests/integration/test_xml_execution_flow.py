@@ -39,9 +39,9 @@ class TestXmlExecutionFlow(unittest.TestCase):
                 """<?xml version="1.0" encoding="UTF-8"?>
 <suite name="SmokeSuite">
   <case name="Login success">
-    <step action="open" target="https://example.test/login" />
-    <step action="type" target="id=username" value="demo" />
-    <step action="click" target="id=submit" />
+    <step keyword="Open"><arg value="https://example.test/login" /></step>
+    <step keyword="Type Text"><arg value="id=username" /><arg value="demo" /></step>
+    <step keyword="Click"><arg value="id=submit" /></step>
   </case>
 </suite>
 """,

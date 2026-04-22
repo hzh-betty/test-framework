@@ -98,7 +98,7 @@ class TestExecutionControlFlow(unittest.TestCase):
                 """<?xml version="1.0" encoding="UTF-8"?>
 <suite name="SmokeSuite">
   <case name="Login" tags="smoke">
-    <step action="open" target="https://example.test/login" />
+    <step keyword="Open"><arg value="https://example.test/login" /></step>
   </case>
 </suite>
 """,
@@ -143,10 +143,10 @@ class TestExecutionControlFlow(unittest.TestCase):
                 """<?xml version="1.0" encoding="UTF-8"?>
 <suite name="SmokeSuite">
   <case name="Login" tags="smoke">
-    <step action="open" target="https://example.test/login" />
+    <step keyword="Open"><arg value="https://example.test/login" /></step>
   </case>
   <case name="Checkout" tags="smoke">
-    <step action="open" target="https://example.test/checkout" />
+    <step keyword="Open"><arg value="https://example.test/checkout" /></step>
   </case>
 </suite>
 """,
