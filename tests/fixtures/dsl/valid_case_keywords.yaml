@@ -4,18 +4,21 @@ variables:
   username: suite-user
 keywords:
   login:
-    - action: open
-      target: ${base_url}/login
-    - action: type
-      target: id=username
-      value: ${username}
+  - keyword: Open
+    args:
+    - ${base_url}/login
+  - keyword: Type Text
+    args:
+    - id=username
+    - ${username}
   submit-login:
-    - call: login
-    - action: click
-      target: id=submit
+  - keyword: login
+  - keyword: Click
+    args:
+    - id=submit
 cases:
-  - name: Login success
-    variables:
-      username: case-user
-    steps:
-      - call: submit-login
+- name: Login success
+  variables:
+    username: case-user
+  steps:
+  - keyword: submit-login

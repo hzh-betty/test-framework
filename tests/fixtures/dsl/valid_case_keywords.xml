@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <suite name="SmokeSuite">
   <variables>
     <var name="base_url" value="https://example.test" />
@@ -6,18 +6,25 @@
   </variables>
   <keywords>
     <keyword name="login">
-      <step action="open" target="${base_url}/login" />
-      <step action="type" target="id=username" value="${username}" />
+      <step keyword="Open">
+        <arg value="${base_url}/login" />
+      </step>
+      <step keyword="Type Text">
+        <arg value="id=username" />
+        <arg value="${username}" />
+      </step>
     </keyword>
     <keyword name="submit-login">
-      <step action="call" target="login" />
-      <step action="click" target="id=submit" />
+      <step keyword="login" />
+      <step keyword="Click">
+        <arg value="id=submit" />
+      </step>
     </keyword>
   </keywords>
   <case name="Login success">
     <variables>
       <var name="username" value="case-user" />
     </variables>
-    <step action="call" target="submit-login" />
+    <step keyword="submit-login" />
   </case>
 </suite>
