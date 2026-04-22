@@ -1,0 +1,22 @@
+stages:
+  - test
+
+webtest:
+  stage: test
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  before_script:
+    - uv sync --dev
+  script:
+    - |
+      DEPLOY_FLAG=""
+      if [ "$WEBTEST_DEPLOY" = "true" ]; then
+        DEPLOY_FLAG="--deploy"
+      fi
+      uv run webtest-framework examples/cases/web_actions_extended.yaml --config examples/config/runtime.yaml --dry-run --stats-output artifacts/statistics.json ${DEPLOY_FLAG}
+    - uv run webtest-framework examples/cases/web_actions_extended.yaml --config examples/config/runtime.yaml --notify --stats-output artifacts/statistics.json
+  artifacts:
+    when: always
+    paths:
+      - artifacts

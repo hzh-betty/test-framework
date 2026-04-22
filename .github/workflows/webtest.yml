@@ -1,0 +1,41 @@
+name: Web Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Run deployment commands before tests"
+        required: false
+        default: "false"
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  webtest:
+    runs-on: ubuntu-latest
+    env:
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+      WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Dry run
+        run: |
+          DEPLOY_FLAG=""
+          if [ "${{ github.event.inputs.deploy }}" = "true" ]; then
+            DEPLOY_FLAG="--deploy"
+          fi
+          uv run webtest-framework examples/cases/web_actions_extended.yaml --config examples/config/runtime.yaml --dry-run --stats-output artifacts/statistics.json ${DEPLOY_FLAG}
+      - name: Run tests
+        run: uv run webtest-framework examples/cases/web_actions_extended.yaml --config examples/config/runtime.yaml --notify --stats-output artifacts/statistics.json
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webtest-artifacts
+          path: artifacts
