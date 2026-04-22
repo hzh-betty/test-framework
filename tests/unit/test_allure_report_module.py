@@ -69,6 +69,10 @@ class TestAllureReportModule(unittest.TestCase):
 
     def test_write_suite_result_contains_steps_and_attachments(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            screenshot = Path(tmpdir) / "failure.png"
+            screenshot.write_bytes(b"fake-png")
+            page_source = Path(tmpdir) / "failure.html"
+            page_source.write_text("<html>failure</html>", encoding="utf-8")
             reporter = AllureReporter(results_dir=Path(tmpdir) / "allure-results")
             suite_result = SuiteExecutionResult(
                 name="Smoke",
@@ -101,6 +105,10 @@ class TestAllureReportModule(unittest.TestCase):
                                     "value": "welcome",
                                 },
                                 current_url="https://example.test/login",
+                                screenshot_path=str(screenshot),
+                                page_source_path=str(page_source),
+                                browser_alias="admin",
+                                page_title="Login",
                             )
                         ],
                         error_message="mismatch",
@@ -132,6 +140,22 @@ class TestAllureReportModule(unittest.TestCase):
                 "https://example.test/login",
             )
             self.assertEqual(
+                payload["steps"][0]["statusDetails"]["diagnostics"]["browser_alias"],
+                "admin",
+            )
+            self.assertEqual(
+                payload["steps"][0]["statusDetails"]["diagnostics"]["page_title"],
+                "Login",
+            )
+            self.assertEqual(
+                payload["steps"][0]["statusDetails"]["diagnostics"]["screenshot_path"],
+                str(screenshot),
+            )
+            self.assertEqual(
+                payload["steps"][0]["statusDetails"]["diagnostics"]["page_source_path"],
+                str(page_source),
+            )
+            self.assertEqual(
                 payload["steps"][0]["statusDetails"]["diagnostics"]["resolved_locator"],
                 {"raw": "id=welcome", "by": "id", "value": "welcome"},
             )
@@ -149,9 +173,13 @@ class TestAllureReportModule(unittest.TestCase):
             self.assertEqual(parameters["locator_by"], "id")
             self.assertEqual(parameters["locator_value"], "welcome")
             self.assertEqual(parameters["current_url"], "https://example.test/login")
+            self.assertEqual(parameters["browser_alias"], "admin")
+            self.assertEqual(parameters["page_title"], "Login")
             self.assertEqual(payload["statusDetails"]["failureType"], "timeout")
             self.assertIn({"name": "failureType", "value": "timeout"}, payload["labels"])
-            self.assertIn("attachments", payload)
+            attachment_names = {attachment["name"] for attachment in payload["attachments"]}
+            self.assertIn("failure-screenshot.png", attachment_names)
+            self.assertIn("page-source.html", attachment_names)
 
     def test_generate_html_report_uses_allure_cli(self):
         calls: list[list[str]] = []

@@ -142,6 +142,14 @@ class AllureReporter:
             diagnostics["resolved_locator"] = step.resolved_locator
         if getattr(step, "current_url", None) is not None:
             diagnostics["current_url"] = step.current_url
+        if getattr(step, "screenshot_path", None) is not None:
+            diagnostics["screenshot_path"] = step.screenshot_path
+        if getattr(step, "page_source_path", None) is not None:
+            diagnostics["page_source_path"] = step.page_source_path
+        if getattr(step, "browser_alias", None) is not None:
+            diagnostics["browser_alias"] = step.browser_alias
+        if getattr(step, "page_title", None) is not None:
+            diagnostics["page_title"] = step.page_title
         return diagnostics
 
     def _build_step_parameters(self, step) -> list[dict[str, str]]:
@@ -172,6 +180,12 @@ class AllureReporter:
         current_url = getattr(step, "current_url", None)
         if isinstance(current_url, str):
             parameters.append({"name": "current_url", "value": current_url})
+        browser_alias = getattr(step, "browser_alias", None)
+        if isinstance(browser_alias, str):
+            parameters.append({"name": "browser_alias", "value": browser_alias})
+        page_title = getattr(step, "page_title", None)
+        if isinstance(page_title, str):
+            parameters.append({"name": "page_title", "value": page_title})
         return parameters
 
     def _build_attachments(self, context, case_name, step_results) -> list[dict]:
@@ -213,9 +227,25 @@ class AllureReporter:
                     binary=True,
                 )
             )
+        page_source = self._find_failure_page_source(step_results)
+        if page_source:
+            attachments.append(
+                self._write_attachment_file(
+                    name="page-source.html",
+                    content=Path(page_source).read_text(encoding="utf-8", errors="replace"),
+                    attachment_type="text/html",
+                    extension=".html",
+                )
+            )
         return attachments
 
     def _find_failure_screenshot(self, case_name: str, step_results) -> str | None:
+        for step in step_results:
+            if step.passed:
+                continue
+            screenshot = getattr(step, "screenshot_path", None)
+            if screenshot and Path(screenshot).exists():
+                return str(screenshot)
         safe_case = case_name.strip().lower().replace(" ", "_")
         for step in step_results:
             if step.passed:
@@ -224,6 +254,15 @@ class AllureReporter:
             screenshot = Path("artifacts/screenshots") / f"{safe_case}_{safe_action}.png"
             if screenshot.exists():
                 return str(screenshot)
+        return None
+
+    def _find_failure_page_source(self, step_results) -> str | None:
+        for step in step_results:
+            if step.passed:
+                continue
+            page_source = getattr(step, "page_source_path", None)
+            if page_source and Path(page_source).exists():
+                return str(page_source)
         return None
 
     def _read_or_placeholder(self, path: str, placeholder: str) -> str:

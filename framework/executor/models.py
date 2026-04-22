@@ -4,7 +4,14 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
-FailureType = Literal["action", "assertion", "timeout", "unknown"]
+FailureType = Literal[
+    "action",
+    "assertion",
+    "browser_session",
+    "locator",
+    "timeout",
+    "unknown",
+]
 
 
 @dataclass(frozen=True)
@@ -23,6 +30,10 @@ class StepExecutionResult:
     retry_trace: list[dict[str, int | str]] = field(default_factory=list)
     resolved_locator: dict[str, str] | None = None
     current_url: str | None = None
+    screenshot_path: str | None = None
+    page_source_path: str | None = None
+    browser_alias: str | None = None
+    page_title: str | None = None
 
 
 @dataclass(frozen=True)
