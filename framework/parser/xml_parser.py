@@ -45,6 +45,10 @@ class XmlCaseParser:
                         context=f"case '{case_name}' variables",
                     ),
                     tags=tags,
+                    module=self._parse_optional_metadata(case.attrib.get("module"), "module"),
+                    type=self._parse_optional_metadata(case.attrib.get("type"), "type"),
+                    priority=self._parse_optional_metadata(case.attrib.get("priority"), "priority"),
+                    owner=self._parse_optional_metadata(case.attrib.get("owner"), "owner"),
                     retry=self._parse_optional_int(case.attrib.get("retry")),
                     continue_on_failure=self._parse_optional_bool(
                         case.attrib.get("continue_on_failure")
@@ -159,3 +163,11 @@ class XmlCaseParser:
             "Invalid boolean value for continue_on_failure: "
             f"'{value}'. Expected one of: true, false, 1, 0"
         )
+
+    def _parse_optional_metadata(self, value: str | None, field: str) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError(f"XML case {field} must be a non-empty string.")
+        return normalized

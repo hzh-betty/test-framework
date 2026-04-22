@@ -125,6 +125,10 @@ class CaseSpec:
     teardown: list[StepSpec] = field(default_factory=list)
     variables: dict[str, str] = field(default_factory=dict)
     tags: list[str] = field(default_factory=list)
+    module: str | None = None
+    type: str | None = None
+    priority: str | None = None
+    owner: str | None = None
     retry: int | None = None
     continue_on_failure: bool = False
 

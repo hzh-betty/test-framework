@@ -103,6 +103,10 @@ class Executor:
         run_empty_suite: bool = False,
         allowed_case_names: set[str] | None = None,
         workers: int = 1,
+        modules: set[str] | None = None,
+        case_types: set[str] | None = None,
+        priorities: set[str] | None = None,
+        owners: set[str] | None = None,
     ) -> SuiteExecutionResult:
         parser = get_parser(dsl_path)
         suite = parser.parse(dsl_path)
@@ -113,6 +117,10 @@ class Executor:
             run_empty_suite=run_empty_suite,
             allowed_case_names=allowed_case_names,
             workers=workers,
+            modules=modules,
+            case_types=case_types,
+            priorities=priorities,
+            owners=owners,
         )
 
     def run_suite(
@@ -123,6 +131,10 @@ class Executor:
         run_empty_suite: bool = False,
         allowed_case_names: set[str] | None = None,
         workers: int = 1,
+        modules: set[str] | None = None,
+        case_types: set[str] | None = None,
+        priorities: set[str] | None = None,
+        owners: set[str] | None = None,
     ) -> SuiteExecutionResult:
         self._notify("start_suite", suite)
         selected_cases = select_cases(
@@ -130,6 +142,10 @@ class Executor:
             include_expr=include_tag_expr,
             exclude_expr=exclude_tag_expr,
             allowed_case_names=allowed_case_names,
+            modules=modules,
+            case_types=case_types,
+            priorities=priorities,
+            owners=owners,
         )
         if not selected_cases and not run_empty_suite:
             raise ValueError("Suite contains no runnable cases after filtering.")
@@ -165,6 +181,11 @@ class Executor:
                             step_results=[],
                             error_message=setup_error,
                             failure_type=suite_setup_outcome.failure_type,
+                            module=case.module,
+                            type=case.type,
+                            priority=case.priority,
+                            owner=case.owner,
+                            tags=list(case.tags),
                         )
                     )
                 failed = len(selected_cases)
@@ -245,6 +266,11 @@ class Executor:
                     name=case.name,
                     passed=True,
                     step_results=step_results,
+                    module=case.module,
+                    type=case.type,
+                    priority=case.priority,
+                    owner=case.owner,
+                    tags=list(case.tags),
                 )
                 break
             if attempt < max_retries:
@@ -263,6 +289,11 @@ class Executor:
                 step_results=step_results,
                 error_message=error_message,
                 failure_type=outcome.failure_type,
+                module=case.module,
+                type=case.type,
+                priority=case.priority,
+                owner=case.owner,
+                tags=list(case.tags),
             )
             break
 
@@ -273,6 +304,11 @@ class Executor:
                 step_results=step_results,
                 error_message="Case execution failed",
                 failure_type="unknown",
+                module=case.module,
+                type=case.type,
+                priority=case.priority,
+                owner=case.owner,
+                tags=list(case.tags),
             )
         self._notify("end_case", case, final_result)
         return final_result

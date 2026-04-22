@@ -127,6 +127,11 @@ def _to_case_result(case: dict) -> CaseExecutionResult:
         step_results=[_to_step_result(step) for step in step_results],
         error_message=case.get("error_message"),
         failure_type=failure_type,
+        module=_to_optional_case_string(case.get("module"), "module"),
+        type=_to_optional_case_string(case.get("type"), "type"),
+        priority=_to_optional_case_string(case.get("priority"), "priority"),
+        owner=_to_optional_case_string(case.get("owner"), "owner"),
+        tags=_to_case_tags(case.get("tags")),
     )
 
 
@@ -209,6 +214,22 @@ def _to_failure_type(value: object) -> FailureType | None:
         f'failure_type must be one of "action", "assertion", "browser_session", "locator", "timeout", "unknown"; '
         f"got {value!r}"
     )
+
+
+def _to_optional_case_string(value: object, field: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    raise ValueError(f'case "{field}" must be a string when provided')
+
+
+def _to_case_tags(value: object) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError('case "tags" must be a list[str] when provided')
+    return list(value)
 
 
 def _to_optional_non_negative_int(value: object, field: str) -> int | None:

@@ -7,7 +7,14 @@ from typing import TypedDict
 from framework.executor.models import FailureType
 
 
-_VALID_FAILURE_TYPES = {"action", "assertion", "timeout", "unknown"}
+_VALID_FAILURE_TYPES = {
+    "action",
+    "assertion",
+    "browser_session",
+    "locator",
+    "timeout",
+    "unknown",
+}
 
 
 class CaseResultsPayload(TypedDict):
@@ -33,8 +40,8 @@ def write_case_results(
         raise ValueError("suite_teardown_error_message must be a string when provided")
     if suite_teardown_failure_type is not None and suite_teardown_failure_type not in _VALID_FAILURE_TYPES:
         raise ValueError(
-            'suite_teardown_failure_type must be one of "action", "assertion", "timeout", '
-            f'"unknown"; got {suite_teardown_failure_type!r}'
+            "suite_teardown_failure_type must be a known failure type; "
+            f"got {suite_teardown_failure_type!r}"
         )
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -73,8 +80,8 @@ def read_case_results_payload(path: Path) -> CaseResultsPayload:
     suite_teardown_failure_type = payload.get("suite_teardown_failure_type")
     if suite_teardown_failure_type is not None and suite_teardown_failure_type not in _VALID_FAILURE_TYPES:
         raise ValueError(
-            'suite_teardown_failure_type must be one of "action", "assertion", "timeout", '
-            f'"unknown"; got {suite_teardown_failure_type!r}'
+            "suite_teardown_failure_type must be a known failure type; "
+            f"got {suite_teardown_failure_type!r}"
         )
     return {
         "cases": cases,

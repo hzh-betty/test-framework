@@ -66,6 +66,10 @@
             </xs:sequence>
             <xs:attribute name="name" type="xs:string" use="required" />
             <xs:attribute name="tags" type="xs:string" use="optional" />
+            <xs:attribute name="module" type="xs:string" use="optional" />
+            <xs:attribute name="type" type="xs:string" use="optional" />
+            <xs:attribute name="priority" type="xs:string" use="optional" />
+            <xs:attribute name="owner" type="xs:string" use="optional" />
             <xs:attribute name="retry" type="xs:nonNegativeInteger" use="optional" />
             <xs:attribute name="continue_on_failure" type="xs:boolean" use="optional" />
           </xs:complexType>

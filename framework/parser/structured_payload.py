@@ -12,6 +12,10 @@ _CASE_ALLOWED_KEYS = {
     "setup",
     "teardown",
     "variables",
+    "module",
+    "type",
+    "priority",
+    "owner",
     "retry",
     "continue_on_failure",
 }
@@ -62,6 +66,10 @@ def _build_case_from_mapping(payload: object, source: str, path: str) -> CaseSpe
     )
     variables = _normalize_variables(case_data.get("variables", {}), source, f"{path}.variables")
     tags = _normalize_tags(case_data.get("tags", []), source, f"{path}.tags")
+    module = _require_optional_metadata(case_data, "module", source, path)
+    case_type = _require_optional_metadata(case_data, "type", source, path)
+    priority = _require_optional_metadata(case_data, "priority", source, path)
+    owner = _require_optional_metadata(case_data, "owner", source, path)
     retry = _require_optional_integer(case_data, "retry", source, path)
     continue_on_failure = _require_optional_boolean(
         case_data,
@@ -78,6 +86,10 @@ def _build_case_from_mapping(payload: object, source: str, path: str) -> CaseSpe
         teardown=teardown,
         variables=variables,
         tags=tags,
+        module=module,
+        type=case_type,
+        priority=priority,
+        owner=owner,
         retry=retry,
         continue_on_failure=continue_on_failure,
     )
@@ -205,6 +217,18 @@ def _require_optional_string(
     if not isinstance(value, str):
         _raise_value_error(source, f"{path}.{key}", "expected a string")
     return value
+
+
+def _require_optional_metadata(
+    data: Mapping[str, object], key: str, source: str, path: str
+) -> str | None:
+    value = _require_optional_string(data, key, source, path)
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        _raise_value_error(source, f"{path}.{key}", "expected a non-empty string")
+    return normalized
 
 
 def _require_optional_scalar(

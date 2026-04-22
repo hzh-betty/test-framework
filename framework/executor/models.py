@@ -115,6 +115,11 @@ class CaseExecutionResult:
     step_results: list[StepExecutionResult] = field(default_factory=list)
     error_message: str | None = None
     failure_type: FailureType | None = None
+    module: str | None = None
+    type: str | None = None
+    priority: str | None = None
+    owner: str | None = None
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
