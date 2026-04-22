@@ -1,9 +1,19 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <suite name="SmokeSuite">
   <case name="Login success">
-    <step action="open" target="https://example.test/login" />
-    <step action="type" target="id=username" value="demo" />
-    <step action="type" target="id=password" value="mode" />
-    <step action="click" target="id=submit" />
+    <step keyword="Open">
+      <arg value="https://example.test/login" />
+    </step>
+    <step keyword="Type Text">
+      <arg value="id=username" />
+      <arg value="demo" />
+    </step>
+    <step keyword="Type Text">
+      <arg value="id=password" />
+      <arg value="mode" />
+    </step>
+    <step keyword="Click">
+      <arg value="id=submit" />
+    </step>
   </case>
 </suite>

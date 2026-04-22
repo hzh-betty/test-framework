@@ -1,15 +1,19 @@
 name: SmokeSuite
 cases:
-  - name: Login success
-    tags: smoke,login
-    steps:
-      - action: open
-        target: https://example.test/login
-      - action: type
-        target: id=username
-        value: demo
-      - action: type
-        target: id=password
-        value: mode
-      - action: click
-        target: id=submit
+- name: Login success
+  tags: smoke,login
+  steps:
+  - keyword: Open
+    args:
+    - https://example.test/login
+  - keyword: Type Text
+    args:
+    - id=username
+    - demo
+  - keyword: Type Text
+    args:
+    - id=password
+    - mode
+  - keyword: Click
+    args:
+    - id=submit
