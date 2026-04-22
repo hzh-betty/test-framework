@@ -22,7 +22,13 @@ from framework.reporting.result_merge import (
     load_merged_suite_result,
     parse_merge_results_argument,
 )
-from framework.selenium import DriverConfig, DriverManager, SeleniumActions
+from framework.selenium import (
+    BrowserSessionManager,
+    DriverConfig,
+    DriverManager,
+    SeleniumActions,
+    SessionActionsProxy,
+)
 
 
 @dataclass(frozen=True)
@@ -36,7 +42,7 @@ class RuntimeDependencies:
     dingtalk_notifier_factory: Callable[[str], DingTalkNotifier]
 
 
-class _ThreadLocalActionsProxy:
+class _ThreadLocalSessionActionsProxy:
     def __init__(
         self,
         driver_manager: DriverManager,
@@ -47,30 +53,34 @@ class _ThreadLocalActionsProxy:
         self._driver_config = driver_config
         self._actions_factory = actions_factory
         self._thread_state = threading.local()
-        self._driver_lock = threading.Lock()
-        self._created_drivers: list[object] = []
+        self._session_lock = threading.Lock()
+        self._session_managers: list[BrowserSessionManager] = []
 
-    def _actions(self) -> SeleniumActions:
-        actions = getattr(self._thread_state, "actions", None)
-        if actions is not None:
-            return actions
-        with self._driver_lock:
-            actions = getattr(self._thread_state, "actions", None)
-            if actions is not None:
-                return actions
-            driver = self._driver_manager.create_driver(self._driver_config)
-            self._created_drivers.append(driver)
-            actions = self._actions_factory(driver)
-            self._thread_state.actions = actions
-            return actions
+    def _actions(self) -> SessionActionsProxy:
+        proxy = getattr(self._thread_state, "actions", None)
+        if proxy is not None:
+            return proxy
+        with self._session_lock:
+            proxy = getattr(self._thread_state, "actions", None)
+            if proxy is not None:
+                return proxy
+            sessions = BrowserSessionManager(
+                driver_manager=self._driver_manager,
+                driver_config=self._driver_config,
+                actions_factory=self._actions_factory,
+            )
+            self._session_managers.append(sessions)
+            proxy = SessionActionsProxy(sessions)
+            self._thread_state.actions = proxy
+            return proxy
 
     def __getattr__(self, name: str):
         return getattr(self._actions(), name)
 
     def quit_all(self) -> None:
-        for driver in self._created_drivers:
-            self._driver_manager.quit_driver(driver)
-        self._created_drivers.clear()
+        for sessions in self._session_managers:
+            sessions.close_all()
+        self._session_managers.clear()
 
 
 def _default_dependencies() -> RuntimeDependencies:
@@ -269,9 +279,13 @@ def main(
         implicit_wait=implicit_wait,
     )
     if args.workers <= 1:
-        driver = driver_manager.create_driver(driver_config)
+        sessions = BrowserSessionManager(
+            driver_manager=driver_manager,
+            driver_config=driver_config,
+            actions_factory=dependencies.actions_factory,
+        )
         try:
-            actions = dependencies.actions_factory(driver)
+            actions = SessionActionsProxy(sessions)
             executor = dependencies.executor_factory(actions, logger)
             suite_result = executor.run_file(
                 args.dsl_path,
@@ -285,9 +299,9 @@ def main(
             _handle_reporting(args, suite_result, dependencies, logger, report_context)
             _handle_notifications(args, suite_result, config, dependencies)
         finally:
-            driver_manager.quit_driver(driver)
+            sessions.close_all()
     else:
-        actions = _ThreadLocalActionsProxy(
+        actions = _ThreadLocalSessionActionsProxy(
             driver_manager=driver_manager,
             driver_config=driver_config,
             actions_factory=dependencies.actions_factory,

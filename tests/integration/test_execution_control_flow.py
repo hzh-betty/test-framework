@@ -180,8 +180,8 @@ class TestExecutionControlFlow(unittest.TestCase):
                 rc = main([str(xml_file), "--rerunfailed", str(rerun_file)], dependencies=deps)
 
             self.assertEqual(rc, 0)
-            self.assertTrue(driver_manager.created)
-            self.assertTrue(driver_manager.quitted)
+            self.assertFalse(driver_manager.created)
+            self.assertFalse(driver_manager.quitted)
             self.assertEqual(actions.calls, [("open", "https://example.test/login")])
             cases = read_case_results(tmp / "artifacts/case-results.json")
             self.assertEqual([case["name"] for case in cases], ["Login"])

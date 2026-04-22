@@ -277,6 +277,42 @@ class TestCliRuntime(unittest.TestCase):
             ],
         )
 
+    def test_main_does_not_create_driver_until_actions_are_used(self):
+        driver_manager = TrackingDriverManager()
+        logger = FakeLogger()
+        executor = FakeExecutor(
+            SuiteExecutionResult(
+                name="Smoke",
+                total_cases=1,
+                passed_cases=1,
+                failed_cases=0,
+                case_results=[],
+            )
+        )
+        deps = RuntimeDependencies(
+            driver_manager_factory=lambda: driver_manager,
+            actions_factory=lambda driver: TrackingActions(driver),
+            executor_factory=lambda _actions, _logger: executor,
+            reporter_factory=lambda _results_dir: FakeReporter(),
+            logger_factory=lambda _level, _file: logger,
+            email_notifier_factory=lambda _config: FakeNotifier(),
+            dingtalk_notifier_factory=lambda _webhook: FakeNotifier(),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xml_file = Path(tmpdir) / "case.xml"
+            xml_file.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+""",
+                encoding="utf-8",
+            )
+
+            rc = main([str(xml_file)], dependencies=deps)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(driver_manager.created_drivers, [])
+
 
     def test_main_loads_rerunfailed_and_passes_allowed_case_names_to_executor(self):
         driver_manager = FakeDriverManager()
@@ -742,8 +778,8 @@ class TestCliRuntime(unittest.TestCase):
             rc = main([str(xml_file), "--allure"], dependencies=deps)
 
         self.assertEqual(rc, 0)
-        self.assertTrue(driver_manager.created)
-        self.assertTrue(driver_manager.quitted)
+        self.assertFalse(driver_manager.created)
+        self.assertFalse(driver_manager.quitted)
         self.assertTrue(reporter.written)
         self.assertTrue(reporter.generated)
 
