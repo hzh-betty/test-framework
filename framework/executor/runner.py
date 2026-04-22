@@ -9,45 +9,53 @@ from typing import Callable
 from uuid import uuid4
 
 from framework.dsl.models import CaseSpec, StepSpec, SuiteSpec
-from framework.executor.action_registry import ActionRegistry, default_action_registry
+from framework.executor.execution_control import select_cases
+from framework.executor.listener import ExecutionListener
+from framework.executor.models import (
+    CaseExecutionResult,
+    FailureType,
+    StepExecutionResult,
+    SuiteExecutionResult,
+)
+from framework.keywords import KeywordDefinition, KeywordRegistry, normalize_keyword_name
+from framework.keywords.arguments import bind_keyword_arguments
+from framework.keywords.web import WebKeywordLibrary
 from framework.logging.runtime_logger import FailureContext
 from framework.page_objects.base_page import BasePage
 from framework.parser import get_parser
-from framework.selenium.wrapper import Locator
 from framework.selenium import (
     AssertionMismatch,
     BrowserSessionError,
     LocatorError,
     WaitTimeoutError,
 )
-
-from .execution_control import select_cases
-from .models import (
-    CaseExecutionResult,
-    FailureType,
-    StepExecutionResult,
-    SuiteExecutionResult,
-)
+from framework.selenium.wrapper import Locator
 
 
 PageFactory = Callable[[], BasePage]
 VARIABLE_PATTERN = re.compile(r"\$\{([^{}]+)\}")
-LOCATOR_ACTIONS = {
+LOCATOR_KEYWORDS = {
     "click",
-    "type",
+    "type text",
     "clear",
-    "assert_text",
-    "wait_visible",
-    "wait_not_visible",
-    "wait_gone",
-    "wait_clickable",
-    "wait_text",
-    "assert_element_visible",
-    "assert_element_contains",
+    "wait visible",
+    "wait not visible",
+    "wait gone",
+    "wait clickable",
+    "wait text",
+    "assert text",
     "select",
     "hover",
-    "upload_file",
+    "upload file",
 }
+
+
+class _DryRunPage:
+    def __getattr__(self, name: str):
+        def _noop(*args, **kwargs):
+            return None
+
+        return _noop
 
 
 class _StepExecutionError(Exception):
@@ -83,7 +91,9 @@ class Executor:
     logger: object | None = None
     screenshot_dir: str = "artifacts/screenshots"
     page_source_dir: str = "artifacts/page-source"
-    action_registry: ActionRegistry = field(default_factory=default_action_registry)
+    keyword_libraries: list[object] = field(default_factory=list)
+    listeners: list[ExecutionListener] = field(default_factory=list)
+    dry_run: bool = False
 
     def run_file(
         self,
@@ -114,6 +124,7 @@ class Executor:
         allowed_case_names: set[str] | None = None,
         workers: int = 1,
     ) -> SuiteExecutionResult:
+        self._notify("start_suite", suite)
         selected_cases = select_cases(
             suite.cases,
             include_expr=include_tag_expr,
@@ -128,7 +139,7 @@ class Executor:
         failed = 0
         variables = dict(suite.variables)
         suite_setup_outcome = self._run_steps_block(
-            page=self.page_factory(),
+            page=self._new_page(),
             case_name=f"{suite.name}::suite_setup",
             steps=suite.setup,
             variables=variables,
@@ -157,30 +168,26 @@ class Executor:
                         )
                     )
                 failed = len(selected_cases)
+            elif workers <= 1 or len(selected_cases) <= 1:
+                for case in selected_cases:
+                    case_results.append(self._run_case(suite, case))
+                passed = sum(1 for result in case_results if result.passed)
+                failed = len(case_results) - passed
             else:
-                if workers <= 1 or len(selected_cases) <= 1:
-                    for case in selected_cases:
-                        result = self._run_case(suite, case)
-                        case_results.append(result)
-                else:
-                    ordered_results: list[CaseExecutionResult | None] = [None] * len(
-                        selected_cases
-                    )
-                    with ThreadPoolExecutor(max_workers=workers) as executor:
-                        future_to_index = {
-                            executor.submit(self._run_case, suite, case): index
-                            for index, case in enumerate(selected_cases)
-                        }
-                        for future in as_completed(future_to_index):
-                            ordered_results[future_to_index[future]] = future.result()
-                    if any(result is None for result in ordered_results):
-                        raise RuntimeError("Missing case execution result in parallel mode.")
-                    case_results = [result for result in ordered_results if result is not None]
+                ordered: list[CaseExecutionResult | None] = [None] * len(selected_cases)
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    future_to_index = {
+                        executor.submit(self._run_case, suite, case): index
+                        for index, case in enumerate(selected_cases)
+                    }
+                    for future in as_completed(future_to_index):
+                        ordered[future_to_index[future]] = future.result()
+                case_results = [result for result in ordered if result is not None]
                 passed = sum(1 for result in case_results if result.passed)
                 failed = len(case_results) - passed
         finally:
             suite_teardown_outcome = self._run_steps_block(
-                page=self.page_factory(),
+                page=self._new_page(),
                 case_name=f"{suite.name}::suite_teardown",
                 steps=suite.teardown,
                 variables=variables,
@@ -198,7 +205,7 @@ class Executor:
                 suite_teardown_outcome.call_chain,
             )
 
-        return SuiteExecutionResult(
+        result = SuiteExecutionResult(
             name=suite.name,
             total_cases=len(selected_cases),
             passed_cases=passed,
@@ -208,19 +215,23 @@ class Executor:
             suite_teardown_error_message=suite_teardown_error_message,
             suite_teardown_failure_type=suite_teardown_outcome.failure_type,
         )
+        self._notify("end_suite", suite, result)
+        return result
 
     def _run_case(self, suite: SuiteSpec, case: CaseSpec) -> CaseExecutionResult:
+        self._notify("start_case", case)
         max_retries = self._normalize_retry(case.retry)
         step_results: list[StepExecutionResult] = []
         if self.logger:
             self.logger.info(f"case_start name={case.name}")
 
+        final_result: CaseExecutionResult | None = None
         for attempt in range(max_retries + 1):
-            page = self.page_factory()
+            page = self._new_page()
             variables = dict(suite.variables)
             variables.update(case.variables)
             attempt_start = len(step_results)
-            attempt_outcome = self._run_case_attempt(
+            outcome = self._run_case_attempt(
                 page=page,
                 suite=suite,
                 case=case,
@@ -229,8 +240,13 @@ class Executor:
                 case_attempt=attempt + 1,
                 case_max_retries=max_retries,
             )
-            if not attempt_outcome.failed:
-                return CaseExecutionResult(name=case.name, passed=True, step_results=step_results)
+            if not outcome.failed:
+                final_result = CaseExecutionResult(
+                    name=case.name,
+                    passed=True,
+                    step_results=step_results,
+                )
+                break
             if attempt < max_retries:
                 del step_results[attempt_start:]
                 if self.logger and hasattr(self.logger, "info"):
@@ -239,35 +255,31 @@ class Executor:
                         f"max_retries={max_retries}"
                     )
                 continue
-
-            case_error_message = self._format_case_error(
-                attempt_outcome.error_message,
-                attempt_outcome.call_chain,
-            )
-            self._log_case_failure(
-                page=page,
-                case=case,
-                outcome=attempt_outcome,
-            )
-            return CaseExecutionResult(
+            error_message = self._format_case_error(outcome.error_message, outcome.call_chain)
+            self._log_case_failure(page=page, case=case, outcome=outcome)
+            final_result = CaseExecutionResult(
                 name=case.name,
                 passed=False,
                 step_results=step_results,
-                error_message=case_error_message,
-                failure_type=attempt_outcome.failure_type,
+                error_message=error_message,
+                failure_type=outcome.failure_type,
             )
+            break
 
-        return CaseExecutionResult(
-            name=case.name,
-            passed=False,
-            step_results=step_results,
-            error_message="Case execution failed",
-            failure_type="unknown",
-        )
+        if final_result is None:
+            final_result = CaseExecutionResult(
+                name=case.name,
+                passed=False,
+                step_results=step_results,
+                error_message="Case execution failed",
+                failure_type="unknown",
+            )
+        self._notify("end_case", case, final_result)
+        return final_result
 
     def _run_case_attempt(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         suite: SuiteSpec,
         case: CaseSpec,
         variables: dict[str, str],
@@ -275,7 +287,7 @@ class Executor:
         case_attempt: int,
         case_max_retries: int,
     ) -> _StepSequenceOutcome:
-        setup_outcome = self._run_steps_block(
+        setup = self._run_steps_block(
             page=page,
             case_name=case.name,
             steps=case.setup,
@@ -286,24 +298,10 @@ class Executor:
             case_attempt=case_attempt,
             case_max_retries=case_max_retries,
         )
-        if setup_outcome.fatal:
-            teardown_outcome = self._run_steps_block(
-                page=page,
-                case_name=case.name,
-                steps=case.teardown,
-                variables=variables,
-                keywords=suite.keywords,
-                step_results=step_results,
-                case_continue_on_failure=case.continue_on_failure,
-                case_attempt=case_attempt,
-                case_max_retries=case_max_retries,
-            )
-            return self._merge_step_outcomes(setup_outcome, teardown_outcome)
-
-        steps_outcome = self._run_steps_block(
+        steps = self._run_steps_block(
             page=page,
             case_name=case.name,
-            steps=case.steps,
+            steps=[] if setup.fatal else case.steps,
             variables=variables,
             keywords=suite.keywords,
             step_results=step_results,
@@ -311,7 +309,7 @@ class Executor:
             case_attempt=case_attempt,
             case_max_retries=case_max_retries,
         )
-        teardown_outcome = self._run_steps_block(
+        teardown = self._run_steps_block(
             page=page,
             case_name=case.name,
             steps=case.teardown,
@@ -322,7 +320,7 @@ class Executor:
             case_attempt=case_attempt,
             case_max_retries=case_max_retries,
         )
-        return self._merge_step_outcomes(setup_outcome, steps_outcome, teardown_outcome)
+        return self._merge_step_outcomes(setup, steps, teardown)
 
     def _merge_step_outcomes(self, *outcomes: _StepSequenceOutcome) -> _StepSequenceOutcome:
         first_failure = next((outcome for outcome in outcomes if outcome.failed), None)
@@ -338,7 +336,7 @@ class Executor:
 
     def _run_steps_block(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         case_name: str,
         steps: list[StepSpec],
         variables: dict[str, str],
@@ -370,7 +368,6 @@ class Executor:
             if not self._should_continue_on_failure(step, case_continue_on_failure):
                 fatal_failure = True
                 break
-
         if first_failure is None:
             return _StepSequenceOutcome()
         return _StepSequenceOutcome(
@@ -385,7 +382,7 @@ class Executor:
 
     def _execute_step_with_retry(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         case_name: str,
         step: StepSpec,
         variables: dict[str, str],
