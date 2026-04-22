@@ -6,12 +6,20 @@ from pathlib import Path
 import re
 import time
 from typing import Callable
+from uuid import uuid4
 
 from framework.dsl.models import CaseSpec, StepSpec, SuiteSpec
+from framework.executor.action_registry import ActionRegistry, default_action_registry
 from framework.logging.runtime_logger import FailureContext
 from framework.page_objects.base_page import BasePage
 from framework.parser import get_parser
 from framework.selenium.wrapper import Locator
+from framework.selenium import (
+    AssertionMismatch,
+    BrowserSessionError,
+    LocatorError,
+    WaitTimeoutError,
+)
 
 from .execution_control import select_cases
 from .models import (
@@ -27,8 +35,11 @@ VARIABLE_PATTERN = re.compile(r"\$\{([^{}]+)\}")
 LOCATOR_ACTIONS = {
     "click",
     "type",
+    "clear",
     "assert_text",
     "wait_visible",
+    "wait_not_visible",
+    "wait_gone",
     "wait_clickable",
     "wait_text",
     "assert_element_visible",
@@ -46,11 +57,13 @@ class _StepExecutionError(Exception):
         step: StepSpec,
         call_chain: list[str],
         failure_type: FailureType,
+        screenshot_path: str | None = None,
     ):
         super().__init__(message)
         self.step = step
         self.call_chain = call_chain
         self.failure_type = failure_type
+        self.screenshot_path = screenshot_path
 
 
 @dataclass(frozen=True)
@@ -61,6 +74,7 @@ class _StepSequenceOutcome:
     failure_type: FailureType | None = None
     step: StepSpec | None = None
     call_chain: list[str] = field(default_factory=list)
+    screenshot_path: str | None = None
 
 
 @dataclass
@@ -68,6 +82,8 @@ class Executor:
     page_factory: PageFactory
     logger: object | None = None
     screenshot_dir: str = "artifacts/screenshots"
+    page_source_dir: str = "artifacts/page-source"
+    action_registry: ActionRegistry = field(default_factory=default_action_registry)
 
     def run_file(
         self,
@@ -317,6 +333,7 @@ class Executor:
             failure_type=first_failure.failure_type if first_failure else None,
             step=first_failure.step if first_failure else None,
             call_chain=list(first_failure.call_chain) if first_failure else [],
+            screenshot_path=first_failure.screenshot_path if first_failure else None,
         )
 
     def _run_steps_block(
@@ -363,6 +380,7 @@ class Executor:
             failure_type=first_failure.failure_type,
             step=first_failure.step,
             call_chain=list(first_failure.call_chain),
+            screenshot_path=first_failure.screenshot_path,
         )
 
     def _execute_step_with_retry(
@@ -452,7 +470,14 @@ class Executor:
                 case_max_retries=case_max_retries,
                 retry_trace=retry_trace,
             )
-            raise _StepExecutionError(str(exc), step, list(call_chain), "action") from exc
+            screenshot_path = step_results[-1].screenshot_path if step_results else None
+            raise _StepExecutionError(
+                str(exc),
+                step,
+                list(call_chain),
+                "action",
+                screenshot_path=screenshot_path,
+            ) from exc
 
         action = resolved_step.action.lower()
         if action == "call":
@@ -494,11 +519,13 @@ class Executor:
                 case_max_retries=case_max_retries,
                 retry_trace=retry_trace,
             )
+            screenshot_path = step_results[-1].screenshot_path if step_results else None
             raise _StepExecutionError(
                 str(exc),
                 resolved_step,
                 list(call_chain),
                 failure_type,
+                screenshot_path=screenshot_path,
             ) from exc
 
         self._record_step_result(
@@ -554,7 +581,14 @@ class Executor:
                 case_max_retries=case_max_retries,
                 retry_trace=retry_trace,
             )
-            raise _StepExecutionError(message, step, list(call_chain), "action")
+            screenshot_path = step_results[-1].screenshot_path if step_results else None
+            raise _StepExecutionError(
+                message,
+                step,
+                list(call_chain),
+                "action",
+                screenshot_path=screenshot_path,
+            )
 
         if keyword_name in call_chain:
             cycle = [*call_chain, keyword_name]
@@ -575,7 +609,14 @@ class Executor:
                 case_max_retries=case_max_retries,
                 retry_trace=retry_trace,
             )
-            raise _StepExecutionError(message, step, cycle, "action")
+            screenshot_path = step_results[-1].screenshot_path if step_results else None
+            raise _StepExecutionError(
+                message,
+                step,
+                cycle,
+                "action",
+                screenshot_path=screenshot_path,
+            )
 
         nested_call_chain = [*call_chain, keyword_name]
         first_failure: _StepExecutionError | None = None
@@ -624,6 +665,7 @@ class Executor:
                 first_failure.step,
                 list(first_failure.call_chain),
                 first_failure.failure_type,
+                screenshot_path=first_failure.screenshot_path,
             )
 
         self._record_step_result(
@@ -681,6 +723,18 @@ class Executor:
                 retry_trace=list(retry_trace),
                 resolved_locator=self._resolve_locator(step),
                 current_url=self._resolve_current_url(page),
+                screenshot_path=(
+                    self._capture_step_screenshot(page, case_name, step)
+                    if not passed
+                    else None
+                ),
+                page_source_path=(
+                    self._capture_page_source(page, case_name, step)
+                    if not passed
+                    else None
+                ),
+                browser_alias=self._resolve_browser_alias(page),
+                page_title=self._resolve_page_title(page),
             )
         )
 
@@ -699,8 +753,10 @@ class Executor:
     def _resolve_locator(self, step: StepSpec) -> dict[str, str] | None:
         action = step.action.lower()
         if action not in LOCATOR_ACTIONS and not (
-            action == "switch_frame" and "=" in step.target
+            action == "switch_frame" and step.target is not None and "=" in step.target
         ):
+            return None
+        if step.target is None:
             return None
         locator = Locator.parse(step.target)
         return {"raw": step.target, "by": locator.by, "value": locator.value}
@@ -708,10 +764,19 @@ class Executor:
     def _resolve_step_variables(self, step: StepSpec, variables: dict[str, str]) -> StepSpec:
         return StepSpec(
             action=self._substitute_variables(step.action, variables, "action"),
-            target=self._substitute_variables(step.target, variables, "target"),
+            target=(
+                self._substitute_variables(step.target, variables, "target")
+                if step.target is not None
+                else None
+            ),
             value=(
                 self._substitute_variables(step.value, variables, "value")
                 if step.value is not None
+                else None
+            ),
+            timeout=(
+                self._substitute_variables(str(step.timeout), variables, "timeout")
+                if step.timeout is not None
                 else None
             ),
             retry=step.retry,
@@ -738,17 +803,83 @@ class Executor:
         case: CaseSpec,
         step: StepSpec,
     ) -> str:
-        safe_case = case.name.strip().lower().replace(" ", "_")
-        safe_action = step.action.strip().lower().replace(" ", "_")
-        screenshot = f"{self.screenshot_dir}/{safe_case}_{safe_action}.png"
+        screenshot = self._build_artifact_path(self.screenshot_dir, case.name, step, ".png")
         page.screenshot(screenshot)
         return screenshot
 
+    def _capture_step_screenshot(
+        self,
+        page: BasePage,
+        case_name: str,
+        step: StepSpec,
+    ) -> str | None:
+        screenshot = self._build_artifact_path(self.screenshot_dir, case_name, step, ".png")
+        try:
+            page.screenshot(screenshot)
+        except Exception as exc:
+            if self.logger and hasattr(self.logger, "error"):
+                self.logger.error(
+                    f"screenshot_capture_failed case={case_name} "
+                    f"action={step.action} error={exc}"
+                )
+            return None
+        return screenshot
+
+    def _capture_page_source(
+        self,
+        page: BasePage,
+        case_name: str,
+        step: StepSpec,
+    ) -> str | None:
+        driver = self._resolve_driver(page)
+        page_source = getattr(driver, "page_source", None)
+        if not isinstance(page_source, str):
+            return None
+        path = Path(self._build_artifact_path(self.page_source_dir, case_name, step, ".html"))
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(page_source, encoding="utf-8", errors="replace")
+        except Exception as exc:
+            if self.logger and hasattr(self.logger, "error"):
+                self.logger.error(
+                    f"page_source_capture_failed case={case_name} "
+                    f"action={step.action} error={exc}"
+                )
+            return None
+        return str(path)
+
+    def _build_artifact_path(
+        self,
+        directory: str,
+        case_name: str,
+        step: StepSpec,
+        extension: str,
+    ) -> str:
+        safe_case = self._safe_artifact_name(case_name)
+        safe_action = self._safe_artifact_name(step.action)
+        return str(Path(directory) / f"{safe_case}_{safe_action}_{uuid4().hex}{extension}")
+
+    def _safe_artifact_name(self, value: str) -> str:
+        normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip().lower())
+        return normalized.strip("_") or "artifact"
+
     def _resolve_current_url(self, page: BasePage) -> str:
-        actions = getattr(page, "actions", None)
-        driver = getattr(actions, "driver", None)
+        driver = self._resolve_driver(page)
         current_url = getattr(driver, "current_url", None)
         return current_url if current_url else "unknown"
+
+    def _resolve_page_title(self, page: BasePage) -> str | None:
+        title = getattr(self._resolve_driver(page), "title", None)
+        return title if isinstance(title, str) else None
+
+    def _resolve_browser_alias(self, page: BasePage) -> str | None:
+        actions = getattr(page, "actions", None)
+        alias = getattr(actions, "current_alias", None)
+        return alias if isinstance(alias, str) else None
+
+    def _resolve_driver(self, page: BasePage):
+        actions = getattr(page, "actions", None)
+        return getattr(actions, "driver", None)
 
     def _parse_wait_text_value(self, raw_value: str) -> tuple[str, int]:
         timeout_suffix = "|timeout="
