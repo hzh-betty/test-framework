@@ -5,20 +5,27 @@ from dataclasses import asdict, dataclass
 import inspect
 import platform
 from pathlib import Path
+import subprocess
 import threading
 from typing import Callable, Sequence
 
 from framework import __version__
 from framework.core import load_runtime_config
 from framework.dsl.models import SuiteSpec
-from framework.executor import Executor, SuiteExecutionResult
+from framework.executor import CaseExecutionResult, Executor, SuiteExecutionResult
 from framework.executor.execution_control import select_cases
 from framework.keywords import load_keyword_libraries, load_listeners
 from framework.logging import configure_runtime_logger
-from framework.notify import DingTalkNotifier, EmailNotifier, SmtpConfig
+from framework.notify import (
+    DingTalkNotifier,
+    EmailNotifier,
+    NotificationDispatcher,
+    SmtpConfig,
+    WebhookNotifier,
+)
 from framework.page_objects.base_page import BasePage
 from framework.parser import get_parser
-from framework.reporting import AllureReporter, ReportContext
+from framework.reporting import AllureReporter, ReportContext, build_statistics, write_statistics
 from framework.reporting.case_results import read_failed_case_names, write_case_results
 from framework.reporting.result_merge import (
     load_merged_suite_result,
@@ -431,6 +438,8 @@ def _handle_notifications(
     suite_result: SuiteExecutionResult,
     config: dict,
     dependencies: RuntimeDependencies,
+    statistics: dict,
+    logger: object,
 ) -> None:
     summary = (
         f"Suite={suite_result.name}, total={suite_result.total_cases}, "
@@ -469,6 +478,172 @@ def _handle_notifications(
         if hasattr(notifier, "retries"):
             notifier.retries = retries
         notifier.send(title="Web Automation Result", text=summary)
+    if args.notify:
+        dispatcher = _build_notification_dispatcher(config, dependencies)
+        errors = dispatcher.send(
+            result=suite_result,
+            statistics=statistics,
+            attachments=_notification_attachments(args),
+        )
+        for error in errors:
+            if hasattr(logger, "error"):
+                logger.error(f"notification_error {error}")
+
+
+def _build_notification_dispatcher(
+    config: dict,
+    dependencies: RuntimeDependencies,
+) -> NotificationDispatcher:
+    notifications = config.get("notifications", {})
+    if notifications is None:
+        notifications = {}
+    if not isinstance(notifications, dict):
+        raise ValueError("notifications must be a mapping.")
+    raw_channels = notifications.get("channels", {})
+    if not isinstance(raw_channels, dict):
+        raise ValueError("notifications.channels must be a mapping.")
+    channels: list[tuple[str, str, object]] = []
+    for name, channel_config in raw_channels.items():
+        if not isinstance(channel_config, dict):
+            raise ValueError(f"notifications.channels.{name} must be a mapping.")
+        if not bool(channel_config.get("enabled", False)):
+            continue
+        trigger = str(channel_config.get("trigger", "always"))
+        retries = int(channel_config.get("retries", 0))
+        notifier = _build_channel_notifier(
+            str(name),
+            channel_config,
+            config,
+            retries,
+            dependencies,
+        )
+        channels.append((str(name), trigger, notifier))
+    return NotificationDispatcher(channels)
+
+
+def _build_channel_notifier(
+    name: str,
+    channel_config: dict,
+    config: dict,
+    retries: int,
+    dependencies: RuntimeDependencies,
+) -> object:
+    normalized = name.strip().lower()
+    if normalized == "email":
+        smtp = channel_config.get("smtp", config.get("smtp"))
+        if not isinstance(smtp, dict):
+            raise ValueError("SMTP config is required for email notification channel.")
+        return dependencies.email_notifier_factory(_smtp_config(smtp, retries))
+    if normalized == "dingtalk":
+        webhook = channel_config.get("webhook") or config.get("dingtalk_webhook")
+        if not webhook:
+            raise ValueError("DingTalk webhook is required.")
+        notifier = dependencies.dingtalk_notifier_factory(str(webhook))
+        if hasattr(notifier, "retries"):
+            notifier.retries = retries
+        return notifier
+    if normalized in {"wecom", "feishu"}:
+        webhook = channel_config.get("webhook")
+        if not webhook:
+            raise ValueError(f"{name} webhook is required.")
+        return WebhookNotifier(kind=normalized, webhook=str(webhook), retries=retries)
+    raise ValueError(f"Unsupported notification channel: {name}")
+
+
+def _smtp_config(smtp: dict, retries: int | None = None) -> SmtpConfig:
+    required_keys = {"host", "port", "username", "password", "sender", "receivers"}
+    missing_keys = sorted(required_keys - smtp.keys())
+    if missing_keys:
+        raise ValueError(f"Missing SMTP config keys: {', '.join(missing_keys)}")
+    return SmtpConfig(
+        host=smtp["host"],
+        port=int(smtp["port"]),
+        username=smtp["username"],
+        password=smtp["password"],
+        sender=smtp["sender"],
+        receivers=list(smtp["receivers"]),
+        use_ssl=bool(smtp.get("use_ssl", True)),
+        timeout_seconds=int(smtp.get("timeout_seconds", 10)),
+        retries=int(smtp.get("retries", retries or 0)),
+    )
+
+
+def _notification_attachments(args) -> list[str]:
+    attachments = [args.log_file, "artifacts/case-results.json", args.stats_output]
+    return [path for path in attachments if Path(path).exists()]
+
+
+def _parse_filter_values(values: list[str] | None) -> set[str] | None:
+    if not values:
+        return None
+    parsed = {
+        item.strip().lower()
+        for value in values
+        for item in value.split(",")
+        if item.strip()
+    }
+    return parsed or None
+
+
+def _run_deploy_if_requested(
+    args,
+    config: dict,
+    selected_cases: list,
+    logger: object,
+) -> SuiteExecutionResult | None:
+    if not args.deploy:
+        return None
+    pipeline = config.get("pipeline", {})
+    if pipeline is None:
+        pipeline = {}
+    if not isinstance(pipeline, dict):
+        raise ValueError("pipeline must be a mapping.")
+    deploy = pipeline.get("deploy", {})
+    if deploy is None:
+        deploy = {}
+    if not isinstance(deploy, dict):
+        raise ValueError("pipeline.deploy must be a mapping.")
+    raw_commands = deploy.get("commands", [])
+    if not isinstance(raw_commands, list) or any(
+        not isinstance(command, str) for command in raw_commands
+    ):
+        raise ValueError("pipeline.deploy.commands must be a list[str].")
+    for command in raw_commands:
+        if hasattr(logger, "info"):
+            logger.info(f"deploy_start command={command}")
+        completed = subprocess.run(command, shell=True, check=False)
+        if completed.returncode != 0:
+            message = (
+                f"deploy command failed with exit code {completed.returncode}: {command}"
+            )
+            if hasattr(logger, "error"):
+                logger.error(message)
+            return _build_deploy_failure_result(selected_cases, message)
+    return None
+
+
+def _build_deploy_failure_result(selected_cases: list, message: str) -> SuiteExecutionResult:
+    case_results = [
+        CaseExecutionResult(
+            name=case.name,
+            passed=False,
+            error_message=message,
+            failure_type="action",
+            module=case.module,
+            type=case.type,
+            priority=case.priority,
+            owner=case.owner,
+            tags=list(case.tags),
+        )
+        for case in selected_cases
+    ]
+    return SuiteExecutionResult(
+        name="DeployFailure",
+        total_cases=len(case_results),
+        passed_cases=0,
+        failed_cases=len(case_results),
+        case_results=case_results,
+    )
 
 
 def _suite_passed(suite_result: SuiteExecutionResult) -> bool:
