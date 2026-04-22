@@ -418,11 +418,7 @@ class Executor:
                 return None
             except _StepExecutionError as exc:
                 retry_trace.append(
-                    {
-                        "attempt": attempt + 1,
-                        "status": "failed",
-                        "error": str(exc),
-                    }
+                    {"attempt": attempt + 1, "status": "failed", "error": str(exc)}
                 )
                 self._update_latest_step_retry_trace(step_results, retry_trace)
                 if attempt < max_retries:
@@ -433,7 +429,7 @@ class Executor:
 
     def _execute_step(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         case_name: str,
         step: StepSpec,
         variables: dict[str, str],
@@ -448,40 +444,35 @@ class Executor:
         retry_trace: list[dict[str, int | str]],
     ) -> None:
         started_at = time.perf_counter()
+        listener_errors = self._notify("start_step", step)
         try:
             resolved_step = self._resolve_step_variables(step, variables)
         except ValueError as exc:
-            self._record_step_result(
-                page=page,
-                case_name=case_name,
-                step_results=step_results,
-                step=step,
-                passed=False,
-                error_message=str(exc),
-                call_chain=call_chain,
-                failure_type="action",
-                duration_ms=self._elapsed_ms(started_at),
-                step_attempt=step_attempt,
-                step_max_retries=step_max_retries,
-                case_attempt=case_attempt,
-                case_max_retries=case_max_retries,
-                retry_trace=retry_trace,
-            )
-            screenshot_path = step_results[-1].screenshot_path if step_results else None
-            raise _StepExecutionError(
-                str(exc),
+            self._record_and_raise(
+                page,
+                case_name,
+                step_results,
                 step,
-                list(call_chain),
+                str(exc),
                 "action",
-                screenshot_path=screenshot_path,
-            ) from exc
+                call_chain,
+                started_at,
+                step_attempt,
+                step_max_retries,
+                case_attempt,
+                case_max_retries,
+                retry_trace,
+                listener_errors,
+            )
 
-        action = resolved_step.action.lower()
-        if action == "call":
-            self._execute_keyword(
+        user_keywords = self._normalize_user_keywords(keywords)
+        normalized = normalize_keyword_name(resolved_step.keyword)
+        if normalized in user_keywords:
+            self._execute_user_keyword(
                 page=page,
                 case_name=case_name,
                 step=resolved_step,
+                keyword_steps=user_keywords[normalized],
                 variables=variables,
                 keywords=keywords,
                 step_results=step_results,
@@ -493,43 +484,44 @@ class Executor:
                 case_attempt=case_attempt,
                 case_max_retries=case_max_retries,
                 retry_trace=retry_trace,
+                listener_errors=listener_errors,
             )
             return
 
         try:
-            self._run_step(page, resolved_step)
+            definition = self._build_keyword_registry(page).get(resolved_step.keyword)
+            bound = bind_keyword_arguments(
+                definition.callable,
+                resolved_step.args,
+                self._step_kwargs_with_timeout(definition, resolved_step),
+            )
+            if not self.dry_run:
+                definition.callable(*bound.args, **bound.kwargs)
         except Exception as exc:
             failure_type = self._classify_failure(exc, resolved_step)
-            self._record_step_result(
-                page=page,
-                case_name=case_name,
-                step_results=step_results,
-                step=resolved_step,
-                passed=False,
-                error_message=str(exc),
-                call_chain=call_chain,
-                failure_type=failure_type,
-                duration_ms=self._elapsed_ms(started_at),
-                step_attempt=step_attempt,
-                step_max_retries=step_max_retries,
-                case_attempt=case_attempt,
-                case_max_retries=case_max_retries,
-                retry_trace=retry_trace,
-            )
-            screenshot_path = step_results[-1].screenshot_path if step_results else None
-            raise _StepExecutionError(
-                str(exc),
+            self._record_and_raise(
+                page,
+                case_name,
+                step_results,
                 resolved_step,
-                list(call_chain),
+                str(exc),
                 failure_type,
-                screenshot_path=screenshot_path,
-            ) from exc
+                call_chain,
+                started_at,
+                step_attempt,
+                step_max_retries,
+                case_attempt,
+                case_max_retries,
+                retry_trace,
+                listener_errors,
+            )
 
         self._record_step_result(
             page=page,
             case_name=case_name,
             step_results=step_results,
             step=resolved_step,
+            definition=definition,
             passed=True,
             error_message=None,
             call_chain=call_chain,
@@ -540,13 +532,15 @@ class Executor:
             case_attempt=case_attempt,
             case_max_retries=case_max_retries,
             retry_trace=retry_trace,
+            listener_errors=listener_errors,
         )
 
-    def _execute_keyword(
+    def _execute_user_keyword(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         case_name: str,
         step: StepSpec,
+        keyword_steps: list[StepSpec],
         variables: dict[str, str],
         keywords: dict[str, list[StepSpec]],
         step_results: list[StepExecutionResult],
@@ -558,59 +552,35 @@ class Executor:
         case_attempt: int,
         case_max_retries: int,
         retry_trace: list[dict[str, int | str]],
+        listener_errors: list[str],
     ) -> None:
-        keyword_name = step.target
-        if keyword_name not in keywords:
-            message = f"Keyword '{keyword_name}' is not defined."
-            self._record_step_result(
-                page=page,
-                case_name=case_name,
-                step_results=step_results,
-                step=step,
-                passed=False,
-                error_message=message,
-                call_chain=call_chain,
-                failure_type="action",
-                duration_ms=self._elapsed_ms(started_at),
-                step_attempt=step_attempt,
-                step_max_retries=step_max_retries,
-                case_attempt=case_attempt,
-                case_max_retries=case_max_retries,
-                retry_trace=retry_trace,
-            )
-            screenshot_path = step_results[-1].screenshot_path if step_results else None
-            raise _StepExecutionError(
-                message,
+        if step.args or step.kwargs:
+            message = f"User keyword '{step.keyword}' does not accept arguments."
+            self._record_and_raise(
+                page,
+                case_name,
+                step_results,
                 step,
-                list(call_chain),
+                message,
                 "action",
-                screenshot_path=screenshot_path,
+                call_chain,
+                started_at,
+                step_attempt,
+                step_max_retries,
+                case_attempt,
+                case_max_retries,
+                retry_trace,
+                listener_errors,
             )
-
-        if keyword_name in call_chain:
-            cycle = [*call_chain, keyword_name]
+        if normalize_keyword_name(step.keyword) in [normalize_keyword_name(item) for item in call_chain]:
+            cycle = [*call_chain, step.keyword]
             message = f"Recursive keyword call detected: {' -> '.join(cycle)}"
-            self._record_step_result(
-                page=page,
-                case_name=case_name,
-                step_results=step_results,
-                step=step,
-                passed=False,
-                error_message=message,
-                call_chain=call_chain,
-                failure_type="action",
-                duration_ms=self._elapsed_ms(started_at),
-                step_attempt=step_attempt,
-                step_max_retries=step_max_retries,
-                case_attempt=case_attempt,
-                case_max_retries=case_max_retries,
-                retry_trace=retry_trace,
-            )
-            screenshot_path = step_results[-1].screenshot_path if step_results else None
-            raise _StepExecutionError(
-                message,
+            self._record_and_raise(
+                page,
+                case_name,
+                step_results,
                 step,
-                cycle,
+                message,
                 "action",
                 screenshot_path=screenshot_path,
             )
