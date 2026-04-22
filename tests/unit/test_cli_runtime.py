@@ -464,11 +464,16 @@ cases:
                 {
                     "name": "Login",
                     "passed": True,
-                    "step_results": [],
-                    "error_message": None,
-                    "failure_type": None,
-                }
-            ],
+                        "step_results": [],
+                        "error_message": None,
+                        "failure_type": None,
+                        "module": None,
+                        "type": None,
+                        "priority": None,
+                        "owner": None,
+                        "tags": [],
+                    }
+                ],
             suite_teardown_failed=False,
             suite_teardown_error_message=None,
             suite_teardown_failure_type=None,
