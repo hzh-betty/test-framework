@@ -582,20 +582,27 @@ class Executor:
                 step,
                 message,
                 "action",
-                screenshot_path=screenshot_path,
+                cycle,
+                started_at,
+                step_attempt,
+                step_max_retries,
+                case_attempt,
+                case_max_retries,
+                retry_trace,
+                listener_errors,
             )
 
-        nested_call_chain = [*call_chain, keyword_name]
+        nested_chain = [*call_chain, step.keyword]
         first_failure: _StepExecutionError | None = None
-        for keyword_step in keywords[keyword_name]:
+        for nested_step in keyword_steps:
             failure = self._execute_step_with_retry(
                 page=page,
                 case_name=case_name,
-                step=keyword_step,
+                step=nested_step,
                 variables=variables,
                 keywords=keywords,
                 step_results=step_results,
-                call_chain=nested_call_chain,
+                call_chain=nested_chain,
                 case_continue_on_failure=case_continue_on_failure,
                 case_attempt=case_attempt,
                 case_max_retries=case_max_retries,
@@ -604,10 +611,7 @@ class Executor:
                 continue
             if first_failure is None:
                 first_failure = failure
-            if not self._should_continue_on_failure(
-                keyword_step,
-                case_continue_on_failure,
-            ):
+            if not self._should_continue_on_failure(nested_step, case_continue_on_failure):
                 break
 
         if first_failure is not None:
@@ -616,6 +620,7 @@ class Executor:
                 case_name=case_name,
                 step_results=step_results,
                 step=step,
+                definition=None,
                 passed=False,
                 error_message=str(first_failure),
                 call_chain=call_chain,
@@ -626,6 +631,7 @@ class Executor:
                 case_attempt=case_attempt,
                 case_max_retries=case_max_retries,
                 retry_trace=retry_trace,
+                listener_errors=listener_errors,
             )
             raise _StepExecutionError(
                 str(first_failure),
@@ -640,6 +646,7 @@ class Executor:
             case_name=case_name,
             step_results=step_results,
             step=step,
+            definition=None,
             passed=True,
             error_message=None,
             call_chain=call_chain,
@@ -650,14 +657,60 @@ class Executor:
             case_attempt=case_attempt,
             case_max_retries=case_max_retries,
             retry_trace=retry_trace,
+            listener_errors=listener_errors,
+        )
+
+    def _record_and_raise(
+        self,
+        page: BasePage | _DryRunPage,
+        case_name: str,
+        step_results: list[StepExecutionResult],
+        step: StepSpec,
+        message: str,
+        failure_type: FailureType,
+        call_chain: list[str],
+        started_at: float,
+        step_attempt: int,
+        step_max_retries: int,
+        case_attempt: int,
+        case_max_retries: int,
+        retry_trace: list[dict[str, int | str]],
+        listener_errors: list[str],
+    ) -> None:
+        self._record_step_result(
+            page=page,
+            case_name=case_name,
+            step_results=step_results,
+            step=step,
+            definition=None,
+            passed=False,
+            error_message=message,
+            call_chain=call_chain,
+            failure_type=failure_type,
+            duration_ms=self._elapsed_ms(started_at),
+            step_attempt=step_attempt,
+            step_max_retries=step_max_retries,
+            case_attempt=case_attempt,
+            case_max_retries=case_max_retries,
+            retry_trace=retry_trace,
+            listener_errors=listener_errors,
+        )
+        screenshot_path = step_results[-1].screenshot_path if step_results else None
+        raise _StepExecutionError(
+            message,
+            step,
+            list(call_chain),
+            failure_type,
+            screenshot_path=screenshot_path,
         )
 
     def _record_step_result(
         self,
-        page: BasePage,
+        page: BasePage | _DryRunPage,
         case_name: str,
         step_results: list[StepExecutionResult],
         step: StepSpec,
+        definition: KeywordDefinition | None,
         passed: bool,
         error_message: str | None,
         call_chain: list[str],
@@ -668,65 +721,62 @@ class Executor:
         case_attempt: int,
         case_max_retries: int,
         retry_trace: list[dict[str, int | str]],
+        listener_errors: list[str],
     ) -> None:
         if self.logger and passed:
             self.logger.info(
-                f"step_pass case={case_name} action={step.action} "
-                f"locator={step.target} call_chain={' > '.join(call_chain) if call_chain else '-'}"
+                f"step_pass case={case_name} keyword={step.keyword} "
+                f"call_chain={' > '.join(call_chain) if call_chain else '-'}"
             )
-        step_results.append(
-            StepExecutionResult(
-                action=step.action,
-                target=step.target,
-                passed=passed,
-                error_message=error_message,
-                call_chain=list(call_chain),
-                failure_type=failure_type,
-                duration_ms=duration_ms,
-                retry_attempt=step_attempt,
-                retry_max_retries=step_max_retries,
-                case_attempt=case_attempt,
-                case_max_retries=case_max_retries,
-                retry_trace=list(retry_trace),
-                resolved_locator=self._resolve_locator(step),
-                current_url=self._resolve_current_url(page),
-                screenshot_path=(
-                    self._capture_step_screenshot(page, case_name, step)
-                    if not passed
-                    else None
-                ),
-                page_source_path=(
-                    self._capture_page_source(page, case_name, step)
-                    if not passed
-                    else None
-                ),
-                browser_alias=self._resolve_browser_alias(page),
-                page_title=self._resolve_page_title(page),
-            )
+        diagnostics: dict[str, object] = {}
+        if listener_errors:
+            diagnostics["listener_errors"] = list(listener_errors)
+        result = StepExecutionResult(
+            keyword_name=definition.name if definition else step.keyword,
+            arguments=self._step_arguments(step),
+            keyword_source=definition.source if definition else "user-keyword",
+            dry_run=self.dry_run,
+            passed=passed,
+            error_message=error_message,
+            call_chain=list(call_chain),
+            failure_type=failure_type,
+            duration_ms=duration_ms,
+            retry_attempt=step_attempt,
+            retry_max_retries=step_max_retries,
+            case_attempt=case_attempt,
+            case_max_retries=case_max_retries,
+            retry_trace=list(retry_trace),
+            resolved_locator=self._resolve_locator(step),
+            current_url=self._resolve_current_url(page),
+            screenshot_path=(
+                self._capture_step_screenshot(page, case_name, step)
+                if not passed and not self.dry_run
+                else None
+            ),
+            page_source_path=(
+                self._capture_page_source(page, case_name, step)
+                if not passed and not self.dry_run
+                else None
+            ),
+            browser_alias=self._resolve_browser_alias(page),
+            page_title=self._resolve_page_title(page),
+            diagnostics=diagnostics,
         )
+        step_results.append(result)
+        end_errors = self._notify("end_step", step, result)
+        if end_errors:
+            updated_diagnostics = dict(step_results[-1].diagnostics)
+            existing = list(updated_diagnostics.get("listener_errors", []))
+            updated_diagnostics["listener_errors"] = [*existing, *end_errors]
+            step_results[-1] = replace(step_results[-1], diagnostics=updated_diagnostics)
 
     def _update_latest_step_retry_trace(
         self,
         step_results: list[StepExecutionResult],
         retry_trace: list[dict[str, int | str]],
     ) -> None:
-        if not step_results:
-            return
-        step_results[-1] = replace(step_results[-1], retry_trace=list(retry_trace))
-
-    def _elapsed_ms(self, started_at: float) -> int:
-        return max(0, int((time.perf_counter() - started_at) * 1000))
-
-    def _resolve_locator(self, step: StepSpec) -> dict[str, str] | None:
-        action = step.action.lower()
-        if action not in LOCATOR_ACTIONS and not (
-            action == "switch_frame" and step.target is not None and "=" in step.target
-        ):
-            return None
-        if step.target is None:
-            return None
-        locator = Locator.parse(step.target)
-        return {"raw": step.target, "by": locator.by, "value": locator.value}
+        if step_results:
+            step_results[-1] = replace(step_results[-1], retry_trace=list(retry_trace))
 
     def _resolve_step_variables(self, step: StepSpec, variables: dict[str, str]) -> StepSpec:
         return StepSpec(
