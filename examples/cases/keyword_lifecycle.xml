@@ -33,7 +33,7 @@
       <step action="call" target="open-login-page" />
     </setup>
     <step action="call" target="submit-login" />
-    <step action="wait_text" target="id=welcome" value="Welcome ${username}|timeout=7" continue_on_failure="true" />
+    <step action="wait_text" target="id=welcome" value="Welcome ${username}" timeout="7s" continue_on_failure="true" />
     <teardown>
       <step action="screenshot" target="artifacts/keyword-case-end.png" />
     </teardown>

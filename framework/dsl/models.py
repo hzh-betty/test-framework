@@ -6,8 +6,9 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class StepSpec:
     action: str
-    target: str
+    target: str | None = None
     value: str | None = None
+    timeout: str | int | float | None = None
     retry: int | None = None
     continue_on_failure: bool = False
 

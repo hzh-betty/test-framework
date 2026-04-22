@@ -46,19 +46,21 @@ uv run webtest-framework examples/cases/login.xml --config examples/config/runti
 - 支持关键词（`keywords`）与调用（`call`）：
   - XML：`<step action="call" target="keyword-name" />`
   - YAML/JSON：支持 `call` 简写（如 `- call: login-flow`）。
-- 支持 `wait_text` 超时后缀语法：`value="期望文本|timeout=7"`；未提供后缀时默认 10 秒。
+- 支持步骤级 `timeout` 字段/属性，等待动作可写 `timeout="500ms"`、`timeout="2s"`、`timeout="1 minute"`；未提供时默认 10 秒。
 - 支持标签与筛选：`tags`、`--include-tag-expr`、`--exclude-tag-expr`。
 
 ## Selenium 动作（DSL `action`）
 
 - 基础：`open`、`click`、`type`、`assert_text`、`screenshot`
-- 等待/断言：`wait_visible`、`wait_clickable`、`wait_text`、`wait_url_contains`、`assert_element_visible`、`assert_element_contains`
-- 交互扩展：`select`、`hover`、`switch_frame`、`switch_window`、`accept_alert`、`upload_file`
+- 等待/断言：`wait_visible`、`wait_not_visible`、`wait_gone`、`wait_clickable`、`wait_text`、`wait_url_contains`、`assert_element_visible`、`assert_element_contains`、`assert_url_contains`、`assert_title_contains`
+- 交互扩展：`clear`、`select`、`hover`、`switch_frame`、`switch_window`、`accept_alert`、`upload_file`
+- 浏览器会话：`new_browser`、`switch_browser`、`close_browser`
 
 说明：
-- `wait_visible` / `wait_clickable` / `wait_url_contains` / `assert_element_visible` / `accept_alert` 的 `value` 作为超时秒数（默认 10）。
-- `accept_alert` 的 `target` 仅作占位，实际控制项为 `value`（超时秒数）。
-- `wait_text` 的 `value` 可直接写文本，或使用 `文本|timeout=N`。
+- `wait_visible` / `wait_clickable` / `wait_text` / `wait_url_contains` / `assert_element_visible` / `accept_alert` 使用 `timeout` 控制等待时间。
+- `wait_text` 的 `value` 仅表示期望文本；旧的 `文本|timeout=N` 混合写法已废弃。
+- 定位器支持严格前缀：`id`、`name`、`css`、`xpath`、`class`、`tag`、`link`、`partial_link`、`text`、`partial_text`、`testid` / `data-testid`；无前缀默认 CSS。
+- 动作名支持 Robot 风格规范化，例如 `Wait Visible`、`wait-visible`、`wait_visible` 等价。
 - `switch_frame` 支持 `default` / `parent` / 数字索引 / 元素定位符。
 - `switch_window` 支持窗口句柄或数字索引。
 

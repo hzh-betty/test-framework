@@ -1,4 +1,5 @@
 import unittest
+import tempfile
 from pathlib import Path
 
 from framework.parser import get_parser
@@ -234,6 +235,49 @@ class TestParserLayer(unittest.TestCase):
         self.assertEqual(suite.keywords["submit-login"][0].target, "login")
         self.assertEqual(suite.cases[0].steps[0].action, "call")
         self.assertEqual(suite.cases[0].steps[0].target, "submit-login")
+
+    def test_xml_parser_parses_timeout_and_optional_target(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            case_file = Path(tmpdir) / "timeout.xml"
+            case_file.write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<suite name="TimeoutSuite">
+  <case name="Alert">
+    <step action="accept_alert" timeout="500ms" />
+  </case>
+</suite>
+""",
+                encoding="utf-8",
+            )
+
+            suite = XmlCaseParser().parse(case_file)
+
+        step = suite.cases[0].steps[0]
+        self.assertEqual(step.action, "accept_alert")
+        self.assertIsNone(step.target)
+        self.assertEqual(step.timeout, "500ms")
+
+    def test_yaml_parser_parses_timeout_and_optional_target(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            case_file = Path(tmpdir) / "timeout.yaml"
+            case_file.write_text(
+                """
+name: TimeoutSuite
+cases:
+  - name: Alert
+    steps:
+      - action: accept_alert
+        timeout: 2s
+""",
+                encoding="utf-8",
+            )
+
+            suite = YamlCaseParser().parse(case_file)
+
+        step = suite.cases[0].steps[0]
+        self.assertEqual(step.action, "accept_alert")
+        self.assertIsNone(step.target)
+        self.assertEqual(step.timeout, "2s")
 
 if __name__ == "__main__":
     unittest.main()

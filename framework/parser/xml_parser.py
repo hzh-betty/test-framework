@@ -116,8 +116,9 @@ class XmlCaseParser:
     def _build_step(self, step: ET.Element) -> StepSpec:
         return StepSpec(
             action=step.attrib["action"],
-            target=step.attrib["target"],
+            target=step.attrib.get("target"),
             value=step.attrib.get("value"),
+            timeout=step.attrib.get("timeout"),
             retry=self._parse_optional_int(step.attrib.get("retry")),
             continue_on_failure=self._parse_optional_bool(
                 step.attrib.get("continue_on_failure")
