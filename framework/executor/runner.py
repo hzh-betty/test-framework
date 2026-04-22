@@ -900,78 +900,7 @@ class Executor:
         return expected, timeout
 
     def _run_step(self, page: BasePage, step: StepSpec) -> None:
-        action = step.action.lower()
-        if action == "open":
-            page.open(step.target)
-            return
-        if action == "click":
-            page.click(step.target)
-            return
-        if action == "type":
-            if step.value is None:
-                raise ValueError("Action 'type' requires a value.")
-            page.type(step.target, step.value)
-            return
-        if action == "assert_text":
-            if step.value is None:
-                raise ValueError("Action 'assert_text' requires a value.")
-            page.assert_text(step.target, step.value)
-            return
-        if action == "wait_visible":
-            timeout = int(step.value) if step.value else 10
-            page.wait_visible(step.target, timeout=timeout)
-            return
-        if action == "wait_clickable":
-            timeout = int(step.value) if step.value else 10
-            page.wait_clickable(step.target, timeout=timeout)
-            return
-        if action == "wait_text":
-            if step.value is None:
-                raise ValueError("Action 'wait_text' requires a value.")
-            expected_text, timeout = self._parse_wait_text_value(step.value)
-            page.wait_text(step.target, expected_text, timeout=timeout)
-            return
-        if action == "wait_url_contains":
-            timeout = int(step.value) if step.value else 10
-            page.wait_url_contains(step.target, timeout=timeout)
-            return
-        if action == "assert_element_visible":
-            timeout = int(step.value) if step.value else 10
-            page.assert_element_visible(step.target, timeout=timeout)
-            return
-        if action == "assert_element_contains":
-            if step.value is None:
-                raise ValueError("Action 'assert_element_contains' requires a value.")
-            page.assert_element_contains(step.target, step.value)
-            return
-        if action == "select":
-            if step.value is None:
-                raise ValueError("Action 'select' requires a value.")
-            page.select(step.target, step.value)
-            return
-        if action == "hover":
-            page.hover(step.target)
-            return
-        if action == "switch_frame":
-            page.switch_frame(step.target)
-            return
-        if action == "switch_window":
-            page.switch_window(step.target)
-            return
-        if action == "accept_alert":
-            timeout = int(step.value) if step.value else 10
-            page.accept_alert(timeout=timeout)
-            return
-        if action == "upload_file":
-            if step.value is None:
-                raise ValueError("Action 'upload_file' requires a value.")
-            page.upload_file(step.target, step.value)
-            return
-        if action == "screenshot":
-            path = step.value or step.target
-            page.screenshot(path)
-            return
-        raise ValueError(f"Unsupported action: '{step.action}'")
+        self.action_registry.dispatch(page, step)
 
     def _should_continue_on_failure(
         self,
@@ -987,9 +916,13 @@ class Executor:
 
     def _classify_failure(self, exc: Exception, step: StepSpec) -> FailureType:
         action = step.action.lower()
-        if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower():
+        if isinstance(exc, (WaitTimeoutError, TimeoutError)) or "timeout" in type(exc).__name__.lower():
             return "timeout"
-        if isinstance(exc, AssertionError) or action.startswith("assert"):
+        if isinstance(exc, LocatorError):
+            return "locator"
+        if isinstance(exc, BrowserSessionError):
+            return "browser_session"
+        if isinstance(exc, (AssertionMismatch, AssertionError)) or action.startswith("assert"):
             return "assertion"
         if isinstance(exc, ValueError):
             return "action"
@@ -1009,15 +942,16 @@ class Executor:
     ) -> None:
         if not self.logger or outcome.step is None:
             return
-        screenshot = "unavailable"
-        try:
-            screenshot = self._capture_failure_screenshot(page, case, outcome.step)
-        except Exception as screenshot_error:
-            if hasattr(self.logger, "error"):
-                self.logger.error(
-                    f"screenshot_capture_failed case={case.name} "
-                    f"action={outcome.step.action} error={screenshot_error}"
-                )
+        screenshot = outcome.screenshot_path or "unavailable"
+        if screenshot == "unavailable":
+            try:
+                screenshot = self._capture_failure_screenshot(page, case, outcome.step)
+            except Exception as screenshot_error:
+                if hasattr(self.logger, "error"):
+                    self.logger.error(
+                        f"screenshot_capture_failed case={case.name} "
+                        f"action={outcome.step.action} error={screenshot_error}"
+                    )
         error_message = outcome.error_message or "Case failed."
         if outcome.call_chain:
             error_message = f"{error_message} call_chain={' > '.join(outcome.call_chain)}"
