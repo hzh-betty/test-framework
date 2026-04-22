@@ -196,6 +196,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include only cases whose tags match this expression.",
     )
     parser.add_argument(
+        "--module",
+        action="append",
+        default=None,
+        help="Run only cases whose module matches one of the provided values.",
+    )
+    parser.add_argument(
+        "--case-type",
+        action="append",
+        default=None,
+        help="Run only cases whose type matches one of the provided values.",
+    )
+    parser.add_argument(
+        "--priority",
+        action="append",
+        default=None,
+        help="Run only cases whose priority matches one of the provided values.",
+    )
+    parser.add_argument(
+        "--owner",
+        action="append",
+        default=None,
+        help="Run only cases whose owner matches one of the provided values.",
+    )
+    parser.add_argument(
         "--exclude-tag-expr",
         default=None,
         help="Exclude cases whose tags match this expression.",
@@ -226,6 +250,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate DSL, variables, keywords and arguments without starting a browser.",
     )
+    parser.add_argument(
+        "--stats-output",
+        default="artifacts/statistics.json",
+        help="Statistics JSON output path.",
+    )
+    parser.add_argument(
+        "--deploy",
+        action="store_true",
+        help="Run configured deployment commands before test execution.",
+    )
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="Send notifications using runtime config notification channels.",
+    )
     return parser
 
 
@@ -253,6 +292,10 @@ def main(
     allowed_case_names = (
         read_failed_case_names(Path(args.rerunfailed)) if args.rerunfailed else None
     )
+    modules = _parse_filter_values(args.module)
+    case_types = _parse_filter_values(args.case_type)
+    priorities = _parse_filter_values(args.priority)
+    owners = _parse_filter_values(args.owner)
     report_context = ReportContext(
         browser=browser,
         headless=headless,
@@ -265,8 +308,9 @@ def main(
         merge_paths = parse_merge_results_argument(args.merge_results)
         suite_result = load_merged_suite_result(merge_paths)
         _write_suite_case_results(suite_result)
+        statistics = _write_statistics(args, suite_result)
         _handle_reporting(args, suite_result, dependencies, logger, report_context)
-        _handle_notifications(args, suite_result, config, dependencies)
+        _handle_notifications(args, suite_result, config, dependencies, statistics, logger)
         return 0 if _suite_passed(suite_result) else 1
 
     suite = _load_suite(args.dsl_path)
@@ -275,6 +319,10 @@ def main(
         include_expr=args.include_tag_expr,
         exclude_expr=args.exclude_tag_expr,
         allowed_case_names=allowed_case_names,
+        modules=modules,
+        case_types=case_types,
+        priorities=priorities,
+        owners=owners,
     )
     if not selected_cases:
         if not args.run_empty_suite:
@@ -287,9 +335,18 @@ def main(
             case_results=[],
         )
         _write_suite_case_results(suite_result)
+        statistics = _write_statistics(args, suite_result)
         _handle_reporting(args, suite_result, dependencies, logger, report_context)
-        _handle_notifications(args, suite_result, config, dependencies)
+        _handle_notifications(args, suite_result, config, dependencies, statistics, logger)
         return 0
+
+    deploy_failure = _run_deploy_if_requested(args, config, selected_cases, logger)
+    if deploy_failure is not None:
+        _write_suite_case_results(deploy_failure)
+        statistics = _write_statistics(args, deploy_failure)
+        _handle_reporting(args, deploy_failure, dependencies, logger, report_context)
+        _handle_notifications(args, deploy_failure, config, dependencies, statistics, logger)
+        return 1
 
     if args.dry_run:
         executor = _build_executor(
@@ -302,15 +359,19 @@ def main(
         )
         suite_result = executor.run_file(
             args.dsl_path,
-            include_tag_expr=args.include_tag_expr,
-            exclude_tag_expr=args.exclude_tag_expr,
-            run_empty_suite=args.run_empty_suite,
-            allowed_case_names=allowed_case_names,
-            workers=args.workers,
+            **_executor_run_kwargs(
+                args,
+                allowed_case_names=allowed_case_names,
+                modules=modules,
+                case_types=case_types,
+                priorities=priorities,
+                owners=owners,
+            ),
         )
         _write_suite_case_results(suite_result)
+        statistics = _write_statistics(args, suite_result)
         _handle_reporting(args, suite_result, dependencies, logger, report_context)
-        _handle_notifications(args, suite_result, config, dependencies)
+        _handle_notifications(args, suite_result, config, dependencies, statistics, logger)
         return 0 if _suite_passed(suite_result) else 1
 
     driver_manager = dependencies.driver_manager_factory()
@@ -337,15 +398,19 @@ def main(
             )
             suite_result = executor.run_file(
                 args.dsl_path,
-                include_tag_expr=args.include_tag_expr,
-                exclude_tag_expr=args.exclude_tag_expr,
-                run_empty_suite=args.run_empty_suite,
-                allowed_case_names=allowed_case_names,
-                workers=args.workers,
+                **_executor_run_kwargs(
+                    args,
+                    allowed_case_names=allowed_case_names,
+                    modules=modules,
+                    case_types=case_types,
+                    priorities=priorities,
+                    owners=owners,
+                ),
             )
             _write_suite_case_results(suite_result)
+            statistics = _write_statistics(args, suite_result)
             _handle_reporting(args, suite_result, dependencies, logger, report_context)
-            _handle_notifications(args, suite_result, config, dependencies)
+            _handle_notifications(args, suite_result, config, dependencies, statistics, logger)
         finally:
             sessions.close_all()
     else:
@@ -365,15 +430,19 @@ def main(
             )
             suite_result = executor.run_file(
                 args.dsl_path,
-                include_tag_expr=args.include_tag_expr,
-                exclude_tag_expr=args.exclude_tag_expr,
-                run_empty_suite=args.run_empty_suite,
-                allowed_case_names=allowed_case_names,
-                workers=args.workers,
+                **_executor_run_kwargs(
+                    args,
+                    allowed_case_names=allowed_case_names,
+                    modules=modules,
+                    case_types=case_types,
+                    priorities=priorities,
+                    owners=owners,
+                ),
             )
             _write_suite_case_results(suite_result)
+            statistics = _write_statistics(args, suite_result)
             _handle_reporting(args, suite_result, dependencies, logger, report_context)
-            _handle_notifications(args, suite_result, config, dependencies)
+            _handle_notifications(args, suite_result, config, dependencies, statistics, logger)
         finally:
             actions.quit_all()
 
@@ -405,6 +474,33 @@ def _build_executor(
     return dependencies.executor_factory(actions, logger)
 
 
+def _executor_run_kwargs(
+    args,
+    *,
+    allowed_case_names: set[str] | None,
+    modules: set[str] | None,
+    case_types: set[str] | None,
+    priorities: set[str] | None,
+    owners: set[str] | None,
+) -> dict:
+    kwargs = {
+        "include_tag_expr": args.include_tag_expr,
+        "exclude_tag_expr": args.exclude_tag_expr,
+        "run_empty_suite": args.run_empty_suite,
+        "allowed_case_names": allowed_case_names,
+        "workers": args.workers,
+    }
+    if modules is not None:
+        kwargs["modules"] = modules
+    if case_types is not None:
+        kwargs["case_types"] = case_types
+    if priorities is not None:
+        kwargs["priorities"] = priorities
+    if owners is not None:
+        kwargs["owners"] = owners
+    return kwargs
+
+
 def _write_suite_case_results(suite_result: SuiteExecutionResult) -> None:
     cases = [asdict(case_result) for case_result in suite_result.case_results]
     write_case_results(
@@ -414,6 +510,11 @@ def _write_suite_case_results(suite_result: SuiteExecutionResult) -> None:
         suite_teardown_error_message=suite_result.suite_teardown_error_message,
         suite_teardown_failure_type=suite_result.suite_teardown_failure_type,
     )
+
+
+def _write_statistics(args, suite_result: SuiteExecutionResult) -> dict:
+    write_statistics(Path(args.stats_output), suite_result)
+    return build_statistics(suite_result)
 
 
 def _handle_reporting(
