@@ -2,29 +2,35 @@ name: SmokeSuite
 variables:
   base_url: https://example.test
 setup:
-  - action: open
-    target: https://example.test/login
+- keyword: Open
+  args:
+  - https://example.test/login
 teardown:
-  - action: screenshot
-    target: artifacts/suite-end.png
+- keyword: Screenshot
+  args:
+  - artifacts/suite-end.png
 cases:
-  - name: Login success
-    tags: smoke,login
-    variables:
-      username: demo
-      password: mode
-    retry: 2
+- name: Login success
+  tags: smoke,login
+  variables:
+    username: demo
+    password: mode
+  retry: 2
+  continue_on_failure: true
+  setup:
+  - keyword: Wait Visible
+    args:
+    - id=username
+  steps:
+  - keyword: Open
+    args:
+    - https://example.test/login
+  - retry: 3
     continue_on_failure: true
-    setup:
-      - action: wait_visible
-        target: id=username
-    steps:
-      - action: open
-        target: https://example.test/login
-      - action: click
-        target: id=submit
-        retry: 3
-        continue_on_failure: true
-    teardown:
-      - action: screenshot
-        target: artifacts/case-end.png
+    keyword: Click
+    args:
+    - id=submit
+  teardown:
+  - keyword: Screenshot
+    args:
+    - artifacts/case-end.png

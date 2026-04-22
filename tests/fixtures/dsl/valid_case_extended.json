@@ -5,14 +5,18 @@
   },
   "setup": [
     {
-      "action": "open",
-      "target": "https://example.test/login"
+      "keyword": "Open",
+      "args": [
+        "https://example.test/login"
+      ]
     }
   ],
   "teardown": [
     {
-      "action": "screenshot",
-      "target": "artifacts/suite-end.png"
+      "keyword": "Screenshot",
+      "args": [
+        "artifacts/suite-end.png"
+      ]
     }
   ],
   "cases": [
@@ -30,26 +34,34 @@
       "continue_on_failure": true,
       "setup": [
         {
-          "action": "wait_visible",
-          "target": "id=username"
+          "keyword": "Wait Visible",
+          "args": [
+            "id=username"
+          ]
         }
       ],
       "steps": [
         {
-          "action": "open",
-          "target": "https://example.test/login"
+          "keyword": "Open",
+          "args": [
+            "https://example.test/login"
+          ]
         },
         {
-          "action": "click",
-          "target": "id=submit",
           "retry": 3,
-          "continue_on_failure": true
+          "continue_on_failure": true,
+          "keyword": "Click",
+          "args": [
+            "id=submit"
+          ]
         }
       ],
       "teardown": [
         {
-          "action": "screenshot",
-          "target": "artifacts/case-end.png"
+          "keyword": "Screenshot",
+          "args": [
+            "artifacts/case-end.png"
+          ]
         }
       ]
     }
