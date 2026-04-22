@@ -5,7 +5,12 @@
       "name": "Login success",
       "retry": -1,
       "steps": [
-        {"action": "open", "target": "https://example.test/login"}
+        {
+          "keyword": "Open",
+          "args": [
+            "https://example.test/login"
+          ]
+        }
       ]
     }
   ]

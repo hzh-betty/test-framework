@@ -3,10 +3,25 @@
   "cases": [
     {
       "name": "Login success",
-      "tags": ["smoke", "login"],
+      "tags": [
+        "smoke",
+        "login"
+      ],
       "steps": [
-        {"action": "open", "target": 123},
-        {"action": "click", "target": "id=submit"}
+        {
+          "keyword": "Open",
+          "args": [
+            {
+              "url": "https://example.test"
+            }
+          ]
+        },
+        {
+          "keyword": "Click",
+          "args": [
+            "id=submit"
+          ]
+        }
       ]
     }
   ]

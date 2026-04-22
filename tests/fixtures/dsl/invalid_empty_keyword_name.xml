@@ -1,11 +1,15 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <suite name="EmptyKeywordName">
   <keywords>
     <keyword name=" ">
-      <step action="open" target="https://example.test/login" />
+      <step keyword="Open">
+        <arg value="https://example.test/login" />
+      </step>
     </keyword>
   </keywords>
   <case name="Login">
-    <step action="open" target="https://example.test/login" />
+    <step keyword="Open">
+      <arg value="https://example.test/login" />
+    </step>
   </case>
 </suite>
