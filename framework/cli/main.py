@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+import inspect
 import platform
 from pathlib import Path
 import threading
@@ -12,6 +13,7 @@ from framework.core import load_runtime_config
 from framework.dsl.models import SuiteSpec
 from framework.executor import Executor, SuiteExecutionResult
 from framework.executor.execution_control import select_cases
+from framework.keywords import load_keyword_libraries, load_listeners
 from framework.logging import configure_runtime_logger
 from framework.notify import DingTalkNotifier, EmailNotifier, SmtpConfig
 from framework.page_objects.base_page import BasePage
@@ -35,7 +37,7 @@ from framework.selenium import (
 class RuntimeDependencies:
     driver_manager_factory: Callable[[], DriverManager]
     actions_factory: Callable[[object], SeleniumActions]
-    executor_factory: Callable[[SeleniumActions, object], Executor]
+    executor_factory: Callable[..., Executor]
     reporter_factory: Callable[[str], AllureReporter]
     logger_factory: Callable[[str, str], object]
     email_notifier_factory: Callable[[SmtpConfig], EmailNotifier]
@@ -87,9 +89,12 @@ def _default_dependencies() -> RuntimeDependencies:
     return RuntimeDependencies(
         driver_manager_factory=lambda: DriverManager(),
         actions_factory=lambda driver: SeleniumActions(driver=driver),
-        executor_factory=lambda actions, logger: Executor(
+        executor_factory=lambda actions, logger, keyword_libraries=None, listeners=None, dry_run=False: Executor(
             page_factory=lambda: BasePage(actions=actions),
             logger=logger,
+            keyword_libraries=list(keyword_libraries or []),
+            listeners=list(listeners or []),
+            dry_run=dry_run,
         ),
         reporter_factory=lambda results_dir: AllureReporter(results_dir=results_dir),
         logger_factory=lambda level, log_file: configure_runtime_logger(
@@ -209,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Case-level worker count; 0 or 1 keeps serial execution.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate DSL, variables, keywords and arguments without starting a browser.",
+    )
     return parser
 
 
@@ -231,6 +241,8 @@ def main(
     log_level = config.get("log_level", args.log_level)
 
     logger = dependencies.logger_factory(log_level, args.log_file)
+    keyword_libraries = load_keyword_libraries(config)
+    listeners = load_listeners(config)
     allowed_case_names = (
         read_failed_case_names(Path(args.rerunfailed)) if args.rerunfailed else None
     )
@@ -272,6 +284,28 @@ def main(
         _handle_notifications(args, suite_result, config, dependencies)
         return 0
 
+    if args.dry_run:
+        executor = _build_executor(
+            dependencies,
+            actions=None,
+            logger=logger,
+            keyword_libraries=keyword_libraries,
+            listeners=listeners,
+            dry_run=True,
+        )
+        suite_result = executor.run_file(
+            args.dsl_path,
+            include_tag_expr=args.include_tag_expr,
+            exclude_tag_expr=args.exclude_tag_expr,
+            run_empty_suite=args.run_empty_suite,
+            allowed_case_names=allowed_case_names,
+            workers=args.workers,
+        )
+        _write_suite_case_results(suite_result)
+        _handle_reporting(args, suite_result, dependencies, logger, report_context)
+        _handle_notifications(args, suite_result, config, dependencies)
+        return 0 if _suite_passed(suite_result) else 1
+
     driver_manager = dependencies.driver_manager_factory()
     driver_config = DriverConfig(
         browser=browser,
@@ -286,7 +320,14 @@ def main(
         )
         try:
             actions = SessionActionsProxy(sessions)
-            executor = dependencies.executor_factory(actions, logger)
+            executor = _build_executor(
+                dependencies,
+                actions=actions,
+                logger=logger,
+                keyword_libraries=keyword_libraries,
+                listeners=listeners,
+                dry_run=False,
+            )
             suite_result = executor.run_file(
                 args.dsl_path,
                 include_tag_expr=args.include_tag_expr,
@@ -307,7 +348,14 @@ def main(
             actions_factory=dependencies.actions_factory,
         )
         try:
-            executor = dependencies.executor_factory(actions, logger)
+            executor = _build_executor(
+                dependencies,
+                actions=actions,
+                logger=logger,
+                keyword_libraries=keyword_libraries,
+                listeners=listeners,
+                dry_run=False,
+            )
             suite_result = executor.run_file(
                 args.dsl_path,
                 include_tag_expr=args.include_tag_expr,
@@ -323,6 +371,31 @@ def main(
             actions.quit_all()
 
     return 0 if _suite_passed(suite_result) else 1
+
+
+def _build_executor(
+    dependencies: RuntimeDependencies,
+    *,
+    actions: object,
+    logger: object,
+    keyword_libraries: list[object],
+    listeners: list[object],
+    dry_run: bool,
+) -> Executor:
+    signature = inspect.signature(dependencies.executor_factory)
+    accepts_varargs = any(
+        parameter.kind == inspect.Parameter.VAR_POSITIONAL
+        for parameter in signature.parameters.values()
+    )
+    if accepts_varargs or len(signature.parameters) >= 5:
+        return dependencies.executor_factory(
+            actions,
+            logger,
+            keyword_libraries,
+            listeners,
+            dry_run,
+        )
+    return dependencies.executor_factory(actions, logger)
 
 
 def _write_suite_case_results(suite_result: SuiteExecutionResult) -> None:

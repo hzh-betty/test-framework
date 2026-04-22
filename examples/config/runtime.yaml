@@ -3,6 +3,9 @@ headless: true
 implicit_wait: 10
 log_level: INFO
 
+keyword_libraries: []
+listeners: []
+
 smtp:
   host: smtp.example.com
   port: 465

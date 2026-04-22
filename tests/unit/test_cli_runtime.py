@@ -208,7 +208,7 @@ class TestCliRuntime(unittest.TestCase):
             dsl_file = tmpdir_path / "case.xml"
             dsl_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -244,7 +244,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login" tags="smoke"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login" tags="smoke"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -303,7 +303,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -313,6 +313,57 @@ class TestCliRuntime(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(driver_manager.created_drivers, [])
 
+    def test_main_dry_run_skips_driver_and_passes_dry_run_executor_flag(self):
+        driver_manager = FakeDriverManager()
+        logger = FakeLogger()
+        captured = {}
+        executor = FakeExecutor(
+            SuiteExecutionResult(
+                name="Smoke",
+                total_cases=1,
+                passed_cases=1,
+                failed_cases=0,
+                case_results=[],
+            )
+        )
+
+        def executor_factory(actions, _logger, keyword_libraries, listeners, dry_run):
+            captured["actions"] = actions
+            captured["keyword_libraries"] = keyword_libraries
+            captured["listeners"] = listeners
+            captured["dry_run"] = dry_run
+            return executor
+
+        deps = RuntimeDependencies(
+            driver_manager_factory=lambda: driver_manager,
+            actions_factory=lambda _driver: object(),
+            executor_factory=executor_factory,
+            reporter_factory=lambda _results_dir: FakeReporter(),
+            logger_factory=lambda _level, _file: logger,
+            email_notifier_factory=lambda _config: FakeNotifier(),
+            dingtalk_notifier_factory=lambda _webhook: FakeNotifier(),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yaml_file = Path(tmpdir) / "case.yaml"
+            yaml_file.write_text(
+                """
+name: SmokeSuite
+cases:
+  - name: Login
+    steps:
+      - keyword: Open
+        args:
+          - https://example.test
+""",
+                encoding="utf-8",
+            )
+            rc = main([str(yaml_file), "--dry-run"], dependencies=deps)
+
+        self.assertEqual(rc, 0)
+        self.assertFalse(driver_manager.created)
+        self.assertTrue(captured["dry_run"])
+        self.assertIsNone(captured["actions"])
 
     def test_main_loads_rerunfailed_and_passes_allowed_case_names_to_executor(self):
         driver_manager = FakeDriverManager()
@@ -341,7 +392,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = tmpdir_path / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -399,7 +450,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -451,7 +502,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = tmpdir_path / "case.xml"
             xml_file.write_text(
                 """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<suite name=\"SmokeSuite\"><case name=\"Login\" tags=\"smoke\"><step action=\"open\" target=\"https://example.test\" /></case></suite>
+<suite name=\"SmokeSuite\"><case name=\"Login\" tags=\"smoke\"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -519,7 +570,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -580,7 +631,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -639,7 +690,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -682,7 +733,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<suite name=\"SmokeSuite\"><case name=\"Login\" tags=\"smoke\"><step action=\"open\" target=\"https://example.test\" /></case></suite>
+<suite name=\"SmokeSuite\"><case name=\"Login\" tags=\"smoke\"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -734,7 +785,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -771,7 +822,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -809,7 +860,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -846,7 +897,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -881,7 +932,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
@@ -915,7 +966,7 @@ class TestCliRuntime(unittest.TestCase):
             xml_file = Path(tmpdir) / "case.xml"
             xml_file.write_text(
                 """<?xml version="1.0" encoding="UTF-8"?>
-<suite name="SmokeSuite"><case name="Login" tags="smoke"><step action="open" target="https://example.test" /></case></suite>
+<suite name="SmokeSuite"><case name="Login" tags="smoke"><step keyword="Open"><arg value="https://example.test" /></step></case></suite>
 """,
                 encoding="utf-8",
             )
