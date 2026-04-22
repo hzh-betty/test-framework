@@ -11,7 +11,7 @@ class TestStructuredPayload(unittest.TestCase):
                 {
                     "name": "Login",
                     "steps": [
-                        {"action": "open", "target": "https://example.test", 1: "boom"},
+                        {"keyword": "Open", "args": ["https://example.test"], 1: "boom"},
                     ],
                 }
             ],
@@ -26,7 +26,7 @@ class TestStructuredPayload(unittest.TestCase):
             "cases": [
                 {
                     "name": "Login",
-                    "steps": [{"action": "open", "target": "https://example.test"}],
+                    "steps": [{"keyword": "Open", "args": ["https://example.test"]}],
                     "zeta": "1",
                     "alpha": "2",
                 }
@@ -40,23 +40,23 @@ class TestStructuredPayload(unittest.TestCase):
         payload = {
             "name": "SmokeSuite",
             "variables": {"base_url": "https://example.test"},
-            "setup": [{"action": "open", "target": "https://example.test/login"}],
-            "teardown": [{"action": "screenshot", "target": "artifacts/suite-end.png"}],
+            "setup": [{"keyword": "Open", "args": ["https://example.test/login"]}],
+            "teardown": [{"keyword": "Screenshot", "args": ["artifacts/suite-end.png"]}],
             "cases": [
                 {
                     "name": "Login",
                     "variables": {"username": "demo"},
                     "retry": 2,
                     "continue_on_failure": True,
-                    "setup": [{"action": "wait_visible", "target": "id=username"}],
+                    "setup": [{"keyword": "Wait Visible", "args": ["id=username"]}],
                     "teardown": [
-                        {"action": "screenshot", "target": "artifacts/case-end.png"}
+                        {"keyword": "Screenshot", "args": ["artifacts/case-end.png"]}
                     ],
                     "steps": [
-                        {"action": "open", "target": "https://example.test/login"},
+                        {"keyword": "Open", "args": ["https://example.test/login"]},
                         {
-                            "action": "click",
-                            "target": "id=submit",
+                            "keyword": "Click",
+                            "args": ["id=submit"],
                             "retry": 3,
                             "continue_on_failure": True,
                         },
@@ -83,7 +83,7 @@ class TestStructuredPayload(unittest.TestCase):
                 {
                     "name": "Login",
                     "retry": "3",
-                    "steps": [{"action": "open", "target": "https://example.test"}],
+                    "steps": [{"keyword": "Open", "args": ["https://example.test"]}],
                 }
             ],
         }
@@ -102,8 +102,8 @@ class TestStructuredPayload(unittest.TestCase):
                     "retry": -1,
                     "steps": [
                         {
-                            "action": "open",
-                            "target": "https://example.test",
+                            "keyword": "Open",
+                            "args": ["https://example.test"],
                             "retry": -2,
                         }
                     ],
@@ -125,8 +125,8 @@ class TestStructuredPayload(unittest.TestCase):
                     "name": "Login",
                     "steps": [
                         {
-                            "action": "open",
-                            "target": "https://example.test",
+                            "keyword": "Open",
+                            "args": ["https://example.test"],
                             "continue_on_failure": "true",
                         }
                     ],
@@ -145,30 +145,28 @@ class TestStructuredPayload(unittest.TestCase):
             "name": "SmokeSuite",
             "keywords": {
                 "open-login": [
-                    {"action": "open", "target": "https://example.test/login"},
+                    {"keyword": "Open", "args": ["https://example.test/login"]},
                 ],
                 "login-flow": [
-                    {"call": "open-login"},
-                    {"action": "click", "target": "id=submit"},
+                    {"keyword": "open-login"},
+                    {"keyword": "Click", "args": ["id=submit"]},
                 ],
             },
             "cases": [
                 {
                     "name": "Login",
-                    "steps": [{"call": "login-flow"}],
+                    "steps": [{"keyword": "login-flow"}],
                 }
             ],
         }
 
         suite = build_suite_from_mapping(payload, "inline")
 
-        self.assertEqual(suite.keywords["open-login"][0].action, "open")
-        self.assertEqual(suite.keywords["login-flow"][0].action, "call")
-        self.assertEqual(suite.keywords["login-flow"][0].target, "open-login")
-        self.assertEqual(suite.cases[0].steps[0].action, "call")
-        self.assertEqual(suite.cases[0].steps[0].target, "login-flow")
+        self.assertEqual(suite.keywords["open-login"][0].keyword, "Open")
+        self.assertEqual(suite.keywords["login-flow"][0].keyword, "open-login")
+        self.assertEqual(suite.cases[0].steps[0].keyword, "login-flow")
 
-    def test_build_suite_from_mapping_rejects_mixed_call_and_action_step(self):
+    def test_build_suite_from_mapping_rejects_removed_call_shorthand(self):
         payload = {
             "name": "SmokeSuite",
             "cases": [
@@ -177,8 +175,6 @@ class TestStructuredPayload(unittest.TestCase):
                     "steps": [
                         {
                             "call": "login-flow",
-                            "action": "open",
-                            "target": "https://example.test/login",
                         }
                     ],
                 }
@@ -187,7 +183,7 @@ class TestStructuredPayload(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ValueError,
-            r"inline \$\.cases\[0\]\.steps\[0\]\.call: cannot be combined with action/target/value",
+            r"inline \$\.cases\[0\]\.steps\[0\]\.call: unknown key",
         ):
             build_suite_from_mapping(payload, "inline")
 

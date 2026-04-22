@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
   <xs:complexType name="stepType">
-    <xs:attribute name="action" type="xs:string" use="required" />
-    <xs:attribute name="target" type="xs:string" use="optional" />
-    <xs:attribute name="value" type="xs:string" use="optional" />
+    <xs:sequence>
+      <xs:element name="arg" minOccurs="0" maxOccurs="unbounded">
+        <xs:complexType mixed="true">
+          <xs:attribute name="value" type="xs:string" use="optional" />
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="kwarg" minOccurs="0" maxOccurs="unbounded">
+        <xs:complexType mixed="true">
+          <xs:attribute name="name" type="xs:string" use="required" />
+          <xs:attribute name="value" type="xs:string" use="optional" />
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+    <xs:attribute name="keyword" type="xs:string" use="required" />
     <xs:attribute name="timeout" type="xs:string" use="optional" />
     <xs:attribute name="retry" type="xs:nonNegativeInteger" use="optional" />
     <xs:attribute name="continue_on_failure" type="xs:boolean" use="optional" />
