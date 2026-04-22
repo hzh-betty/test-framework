@@ -1034,3 +1034,29 @@ class Executor:
             error=error_message,
         )
         self.logger.error(failure_context.to_log_message())
+
+    def _first_argument(self, step: StepSpec | None) -> str | None:
+        if step is None or not step.args:
+            return None
+        value = step.args[0]
+        return value if isinstance(value, str) else str(value)
+
+    def _notify(self, event: str, *args) -> list[str]:
+        errors: list[str] = []
+        for listener in self.listeners:
+            callback = getattr(listener, event, None)
+            if not callable(callback):
+                continue
+            try:
+                callback(*args)
+            except Exception as exc:
+                message = f"{listener.__class__.__name__}.{event}: {exc}"
+                errors.append(message)
+                if self.logger and hasattr(self.logger, "error"):
+                    self.logger.error(f"listener_error {message}")
+        return errors
+
+    def _new_page(self):
+        if self.dry_run:
+            return _DryRunPage()
+        return self.page_factory()
