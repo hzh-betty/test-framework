@@ -24,6 +24,12 @@ class FakeElement:
     def click(self):
         self.clicked = True
 
+    def is_displayed(self):
+        return True
+
+    def is_enabled(self):
+        return True
+
 
 class FakeAlert:
     def __init__(self):
@@ -94,6 +100,27 @@ class TestSeleniumWrapper(unittest.TestCase):
         actions = SeleniumActions(driver=driver)
         actions.type("id=username", "demo")
 
+        self.assertTrue(element.cleared)
+        self.assertEqual(element.sent_value, "demo")
+
+    def test_click_uses_clickable_wait_before_clicking(self):
+        driver = FakeDriver()
+        element = FakeElement()
+        actions = SeleniumActions(driver=driver)
+        with patch.object(actions, "_find_clickable", return_value=element) as finder:
+            actions.click("id=submit")
+
+        finder.assert_called_once_with("id=submit", action="click")
+        self.assertTrue(element.clicked)
+
+    def test_type_uses_visible_wait_before_input(self):
+        driver = FakeDriver()
+        element = FakeElement()
+        actions = SeleniumActions(driver=driver)
+        with patch.object(actions, "_find_visible", return_value=element) as finder:
+            actions.type("id=username", "demo")
+
+        finder.assert_called_once_with("id=username", action="type")
         self.assertTrue(element.cleared)
         self.assertEqual(element.sent_value, "demo")
 
@@ -287,7 +314,7 @@ class TestSeleniumWrapper(unittest.TestCase):
         actions = SeleniumActions(driver=driver)
         failing_upload = MagicMock()
         failing_upload.send_keys.side_effect = OSError("disk unavailable")
-        with patch.object(actions, "_find", return_value=failing_upload):
+        with patch.object(actions, "_find_visible", return_value=failing_upload):
             with self.assertRaisesRegex(
                 RuntimeError,
                 "upload_file.*locator='id=upload'.*target='fixtures/demo.txt'.*disk unavailable",

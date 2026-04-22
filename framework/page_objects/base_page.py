@@ -16,11 +16,20 @@ class BasePage:
     def type(self, locator: str, value: str) -> None:
         self.actions.type(locator, value)
 
+    def clear(self, locator: str) -> None:
+        self.actions.clear(locator)
+
     def assert_text(self, locator: str, expected: str) -> None:
         self.actions.assert_text(locator, expected)
 
     def wait_visible(self, locator: str, timeout: int = 10):
         return self.actions.wait_visible(locator, timeout=timeout)
+
+    def wait_not_visible(self, locator: str, timeout: int = 10):
+        return self.actions.wait_not_visible(locator, timeout=timeout)
+
+    def wait_gone(self, locator: str, timeout: int = 10):
+        return self.actions.wait_gone(locator, timeout=timeout)
 
     def wait_clickable(self, locator: str, timeout: int = 10):
         return self.actions.wait_clickable(locator, timeout=timeout)
@@ -36,6 +45,12 @@ class BasePage:
 
     def assert_element_contains(self, locator: str, expected: str) -> None:
         self.actions.assert_element_contains(locator, expected)
+
+    def assert_url_contains(self, fragment: str) -> None:
+        self.actions.assert_url_contains(fragment)
+
+    def assert_title_contains(self, expected: str) -> None:
+        self.actions.assert_title_contains(expected)
 
     def select(self, locator: str, option_text: str) -> None:
         self.actions.select(locator, option_text)
@@ -57,3 +72,12 @@ class BasePage:
 
     def screenshot(self, path: str) -> None:
         self.actions.screenshot(path)
+
+    def new_browser(self, alias: str = "default") -> None:
+        self.actions.new_browser(alias)
+
+    def switch_browser(self, alias: str) -> None:
+        self.actions.switch_browser(alias)
+
+    def close_browser(self, alias: str | None = None) -> None:
+        self.actions.close_browser(alias)

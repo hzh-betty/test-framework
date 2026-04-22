@@ -1,35 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
-
-LOCATOR_STRATEGIES = {
-    "id": "id",
-    "name": "name",
-    "xpath": "xpath",
-    "css": "css selector",
-    "class": "class name",
-    "tag": "tag name",
-    "link": "link text",
-    "partial_link": "partial link text",
-}
-
-
-@dataclass(frozen=True)
-class Locator:
-    by: str
-    value: str
-
-    @classmethod
-    def parse(cls, raw_locator: str) -> "Locator":
-        if "=" not in raw_locator:
-            return cls(by=LOCATOR_STRATEGIES["css"], value=raw_locator)
-        strategy, value = raw_locator.split("=", 1)
-        normalized = strategy.strip().lower()
-        if normalized not in LOCATOR_STRATEGIES:
-            return cls(by=LOCATOR_STRATEGIES["css"], value=raw_locator)
-        return cls(by=LOCATOR_STRATEGIES[normalized], value=value.strip())
+from .errors import AssertionMismatch, WaitTimeoutError
+from .locators import Locator
 
 
 class SeleniumActions:
@@ -40,17 +14,20 @@ class SeleniumActions:
         self.driver.get(url)
 
     def click(self, locator: str) -> None:
-        self._find(locator, action="click").click()
+        self._find_clickable(locator, action="click").click()
 
     def type(self, locator: str, value: str) -> None:
-        element = self._find(locator, action="type")
+        element = self._find_visible(locator, action="type")
         element.clear()
         element.send_keys(value)
+
+    def clear(self, locator: str) -> None:
+        self._find_visible(locator, action="clear").clear()
 
     def assert_text(self, locator: str, expected: str) -> None:
         actual = self._find(locator, action="assert_text").text
         if actual != expected:
-            raise AssertionError(
+            raise AssertionMismatch(
                 f"Text assertion failed for '{locator}': expected '{expected}', got '{actual}'"
             )
 
@@ -64,6 +41,20 @@ class SeleniumActions:
             timeout=timeout,
             locator=locator,
         )
+
+    def wait_not_visible(self, locator: str, timeout: int = 10):
+        from selenium.webdriver.support import expected_conditions as ec
+
+        parsed = self._parse_locator(locator, action="wait_not_visible")
+        return self._wait_for(
+            action="wait_not_visible",
+            condition=ec.invisibility_of_element_located((parsed.by, parsed.value)),
+            timeout=timeout,
+            locator=locator,
+        )
+
+    def wait_gone(self, locator: str, timeout: int = 10):
+        return self.wait_not_visible(locator, timeout=timeout)
 
     def wait_clickable(self, locator: str, timeout: int = 10):
         from selenium.webdriver.support import expected_conditions as ec
@@ -101,7 +92,7 @@ class SeleniumActions:
         try:
             return self.wait_visible(locator, timeout=timeout)
         except TimeoutError as exc:
-            raise AssertionError(
+            raise AssertionMismatch(
                 self._format_action_error(
                     action="assert_element_visible",
                     locator=locator,
@@ -113,7 +104,7 @@ class SeleniumActions:
     def assert_element_contains(self, locator: str, expected: str) -> None:
         actual = self._find(locator, action="assert_element_contains").text
         if expected not in actual:
-            raise AssertionError(
+            raise AssertionMismatch(
                 self._format_action_error(
                     action="assert_element_contains",
                     locator=locator,
@@ -121,11 +112,33 @@ class SeleniumActions:
                 )
             )
 
+    def assert_url_contains(self, fragment: str) -> None:
+        current_url = getattr(self.driver, "current_url", "")
+        if fragment not in current_url:
+            raise AssertionMismatch(
+                self._format_action_error(
+                    action="assert_url_contains",
+                    target=fragment,
+                    detail=f"current url '{current_url}' does not contain '{fragment}'",
+                )
+            )
+
+    def assert_title_contains(self, expected: str) -> None:
+        title = getattr(self.driver, "title", "")
+        if expected not in title:
+            raise AssertionMismatch(
+                self._format_action_error(
+                    action="assert_title_contains",
+                    target=expected,
+                    detail=f"title '{title}' does not contain '{expected}'",
+                )
+            )
+
     def select(self, locator: str, option_text: str) -> None:
         from selenium.webdriver.support.ui import Select
 
         try:
-            element = self._find(locator, action="select")
+            element = self._find_visible(locator, action="select")
             Select(element).select_by_visible_text(option_text)
         except Exception as exc:
             raise RuntimeError(
@@ -210,7 +223,7 @@ class SeleniumActions:
 
     def upload_file(self, locator: str, file_path: str) -> None:
         try:
-            element = self._find(locator, action="upload_file")
+            element = self._find_visible(locator, action="upload_file")
             element.send_keys(file_path)
         except Exception as exc:
             raise RuntimeError(
@@ -241,6 +254,28 @@ class SeleniumActions:
                 )
             ) from exc
 
+    def _find_visible(self, locator: str, action: str):
+        from selenium.webdriver.support import expected_conditions as ec
+
+        parsed = self._parse_locator(locator, action=action)
+        return self._wait_for(
+            action=action,
+            condition=ec.visibility_of_element_located((parsed.by, parsed.value)),
+            timeout=10,
+            locator=locator,
+        )
+
+    def _find_clickable(self, locator: str, action: str):
+        from selenium.webdriver.support import expected_conditions as ec
+
+        parsed = self._parse_locator(locator, action=action)
+        return self._wait_for(
+            action=action,
+            condition=ec.element_to_be_clickable((parsed.by, parsed.value)),
+            timeout=10,
+            locator=locator,
+        )
+
     def _parse_locator(self, locator: str, action: str) -> Locator:
         if not locator.strip():
             raise ValueError(
@@ -262,7 +297,7 @@ class SeleniumActions:
         try:
             return WebDriverWait(self.driver, timeout).until(condition)
         except TimeoutException as exc:
-            raise TimeoutError(
+            raise WaitTimeoutError(
                 self._format_action_error(
                     action=action,
                     locator=locator,
