@@ -1,0 +1,132 @@
+suite:
+  name: 框架能力示例套件
+  variables:
+    base_url: https://example.test
+    api_url: https://api.example.test
+    upload_file: /tmp/demo-upload.txt
+    api_token: demo-token
+
+  keywords:
+    打开登录页:
+      - keyword: Open
+        args: ["${base_url}/login"]
+      - keyword: Wait URL Contains
+        args: [login]
+        timeout: 2s
+
+    填写登录表单:
+      - keyword: Wait Visible
+        args: [id=username]
+        timeout: 500ms
+      - keyword: Type Text
+        args: [id=username, demo]
+      - keyword: Clear
+        args: [id=password]
+      - keyword: Type Text
+        args: [id=password, secret]
+      - keyword: Wait Clickable
+        args: [testid=login-submit]
+        timeout: 1 minute
+      - keyword: Click
+        args: [testid=login-submit]
+
+  setup:
+    - keyword: New Browser
+      args: [main]
+    - keyword: Switch Browser
+      args: [main]
+
+  cases:
+    - name: Web UI 关键字能力展示
+      module: web
+      type: ui
+      priority: p0
+      owner: qa-web
+      tags: [smoke, ui, browser]
+      retry: 1
+      continue_on_failure: true
+      setup:
+        - keyword: 打开登录页
+      steps:
+        - keyword: 填写登录表单
+        - keyword: Wait Text
+          args: [css=.toast, 登录成功]
+          timeout: 2s
+          retry: 1
+        - keyword: Assert URL Contains
+          args: [dashboard]
+        - keyword: Assert Title Contains
+          args: [控制台]
+        - keyword: Assert Text
+          args: [css=.welcome, 欢迎]
+        - keyword: Assert Element Visible
+          args: [partial_text=个人中心]
+        - keyword: Assert Element Contains
+          args: [css=.user-card, demo]
+        - keyword: Wait Not Visible
+          args: [css=.loading]
+          timeout: 2s
+        - keyword: Wait Gone
+          args: [css=.skeleton]
+          timeout: 2s
+        - keyword: Select
+          args: [name=role, 管理员]
+        - keyword: Hover
+          args: [class=menu-item]
+        - keyword: Switch Frame
+          args: [default]
+        - keyword: Switch Frame
+          args: [parent]
+        - keyword: Switch Window
+          args: ["0"]
+        - keyword: Accept Alert
+          continue_on_failure: true
+        - keyword: Upload File
+          args:
+            - "css=input[type='file']"
+            - "${upload_file}"
+        - keyword: Screenshot
+          args: [artifacts/demo-ui.png]
+      teardown:
+        - keyword: Screenshot
+          args: [artifacts/demo-ui-teardown.png]
+
+    - name: HTTP API 关键字能力展示
+      module: api
+      type: api
+      priority: p1
+      owner: qa-api
+      tags: [smoke, api]
+      variables:
+        user_id: 10001
+      steps:
+        - keyword: HTTP GET
+          args: ["${api_url}/users/${user_id}"]
+          kwargs:
+            headers:
+              Authorization: Bearer ${api_token}
+            timeout: 3
+        - keyword: Assert Response Status
+          args: [200]
+        - keyword: Assert Response Header
+          args: [content-type, application/json]
+        - keyword: Assert Response JSON
+          args: [data.name, Alice]
+        - keyword: Assert Response Body Contains
+          args: [Alice]
+        - keyword: HTTP POST
+          args: ["${api_url}/users"]
+          kwargs:
+            headers:
+              Authorization: Bearer ${api_token}
+            json:
+              name: Alice
+              roles: [admin, editor]
+        - keyword: HTTP Request
+          args: [DELETE, "${api_url}/users/${user_id}"]
+          kwargs:
+            headers:
+              Authorization: Bearer ${api_token}
+
+  teardown:
+    - keyword: Close Browser

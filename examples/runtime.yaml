@@ -1,0 +1,40 @@
+browser: chrome
+headless: true
+timeouts:
+  implicit_wait: 5
+  explicit_wait: 10
+logging:
+  level: INFO
+  file: artifacts/runtime.log
+reports:
+  html: true
+  allure: false
+pipeline:
+  deploy:
+    commands:
+      - python -c "print('部署占位命令')"
+notifications:
+  channels:
+    - type: email
+      enabled: false
+      trigger: on_failure
+      retries: 1
+      smtp:
+        host: smtp.example.com
+        port: 465
+        username: ${WEBTEST_SMTP_USERNAME}
+        password: ${WEBTEST_SMTP_PASSWORD}
+        sender: webtest@example.com
+        receivers:
+          - qa@example.com
+          - dev@example.com
+    - type: dingtalk
+      enabled: false
+      trigger: on_failure
+      retries: 1
+      webhook: ${WEBTEST_DINGTALK_WEBHOOK}
+    - type: feishu
+      enabled: false
+      trigger: always
+      retries: 1
+      webhook: ${WEBTEST_FEISHU_WEBHOOK}
