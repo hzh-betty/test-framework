@@ -178,3 +178,180 @@ class SuiteExecutor:
             suite.keywords,
             step_results,
             case_attempt=case_attempt,
+            case_max_retries=case.retry,
+        )
+        passed = passed and teardown_passed
+        return CaseResult(
+            name=case.name,
+            passed=passed,
+            step_results=step_results,
+            error_message=None if passed else _first_error(step_results),
+            failure_type=None if passed else _first_failure_type(step_results),
+            module=case.module,
+            type=case.type,
+            priority=case.priority,
+            owner=case.owner,
+            tags=list(case.tags),
+        )
+
+    def _run_steps(
+        self,
+        steps: list[StepSpec],
+        variables: dict[str, Scalar],
+        user_keywords: dict[str, list[StepSpec]],
+        step_results: list[StepResult],
+        *,
+        continue_on_failure: bool = False,
+        call_chain: list[str] | None = None,
+        case_attempt: int = 1,
+        case_max_retries: int = 0,
+    ) -> bool:
+        passed = True
+        for step in steps:
+            current_chain = [*(call_chain or []), step.keyword]
+            if step.keyword in user_keywords:
+                nested_ok = self._run_steps(
+                    user_keywords[step.keyword],
+                    variables,
+                    user_keywords,
+                    step_results,
+                    continue_on_failure=continue_on_failure or step.continue_on_failure,
+                    call_chain=current_chain,
+                    case_attempt=case_attempt,
+                    case_max_retries=case_max_retries,
+                )
+                passed = passed and nested_ok
+                if not nested_ok and not (continue_on_failure or step.continue_on_failure):
+                    return False
+                continue
+
+            result = self._run_step(
+                step,
+                variables,
+                call_chain=current_chain,
+                case_attempt=case_attempt,
+                case_max_retries=case_max_retries,
+            )
+            step_results.append(result)
+            if not result.passed:
+                passed = False
+                if not (continue_on_failure or step.continue_on_failure):
+                    return False
+        return passed
+
+    def _run_step(
+        self,
+        step: StepSpec,
+        variables: dict[str, Scalar],
+        *,
+        call_chain: list[str],
+        case_attempt: int,
+        case_max_retries: int,
+    ) -> StepResult:
+        args = interpolate(step.args, variables)
+        kwargs = interpolate(step.kwargs, variables)
+        if step.timeout is not None and "timeout" not in kwargs:
+            kwargs = {**kwargs, "timeout": interpolate(step.timeout, variables)}
+        max_retries = step.retry
+        retry_trace: list[dict[str, object]] = []
+        for attempt in range(1, max_retries + 2):
+            started = time.perf_counter()
+            try:
+                if not self.registry.has(step.keyword):
+                    raise KeyError(f"Unknown keyword: {step.keyword}")
+                if not self.dry_run:
+                    self.registry.run(step.keyword, list(args), dict(kwargs))
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                return StepResult(
+                    keyword=step.keyword,
+                    passed=True,
+                    arguments=list(args),
+                    kwargs=dict(kwargs),
+                    dry_run=self.dry_run,
+                    call_chain=list(call_chain),
+                    duration_ms=duration_ms,
+                    retry_attempt=attempt,
+                    retry_max_retries=max_retries,
+                    case_attempt=case_attempt,
+                    case_max_retries=case_max_retries,
+                    retry_trace=[*retry_trace],
+                    resolved_locator=_resolved_locator(args),
+                    current_url=_current_url(self.registry),
+                )
+            # 关键字库可能抛出任意异常；执行器必须把它们转换成结构化结果，
+            # 否则报告、通知和重跑失败都无法获得稳定的数据。
+            except Exception as exc:
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                failure_type = _classify_failure(exc)
+                if attempt <= max_retries:
+                    retry_trace.append(
+                        {
+                            "attempt": attempt,
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+                return StepResult(
+                    keyword=step.keyword,
+                    passed=False,
+                    arguments=list(args),
+                    kwargs=dict(kwargs),
+                    dry_run=self.dry_run,
+                    error_message=str(exc),
+                    failure_type=failure_type,
+                    call_chain=list(call_chain),
+                    duration_ms=duration_ms,
+                    retry_attempt=attempt,
+                    retry_max_retries=max_retries,
+                    case_attempt=case_attempt,
+                    case_max_retries=case_max_retries,
+                    retry_trace=[*retry_trace],
+                    resolved_locator=_resolved_locator(args),
+                    current_url=_current_url(self.registry),
+                )
+
+
+def _classify_failure(exc: Exception) -> FailureType:
+    if isinstance(exc, KeyError):
+        return "validation"
+    if isinstance(exc, AssertionError):
+        return "assertion"
+    return "action"
+
+
+def _first_error(steps: list[StepResult]) -> str | None:
+    for step in steps:
+        if not step.passed:
+            return step.error_message
+    return None
+
+
+def _first_failure_type(steps: list[StepResult]) -> FailureType | None:
+    for step in steps:
+        if not step.passed:
+            return step.failure_type
+    return None
+
+
+def _resolved_locator(args: object) -> dict[str, str] | None:
+    if not isinstance(args, list) or not args or not isinstance(args[0], str):
+        return None
+    raw = args[0]
+    if raw.startswith(("http://", "https://", "/")):
+        return None
+    if "=" in raw:
+        by, value = raw.split("=", 1)
+    else:
+        by, value = "css", raw
+    return {"raw": raw, "by": by, "value": value}
+
+
+def _current_url(registry: KeywordRegistry) -> str | None:
+    for definition in getattr(registry, "_keywords", {}).values():
+        actions = getattr(getattr(definition.func, "__self__", None), "actions", None)
+        driver = getattr(actions, "driver", None)
+        current_url = getattr(driver, "current_url", None)
+        if isinstance(current_url, str):
+            return current_url
+    return None
