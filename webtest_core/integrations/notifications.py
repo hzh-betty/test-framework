@@ -178,3 +178,18 @@ def _should_send(trigger: str, result: SuiteResult) -> bool:
     return False
 
 
+def _notification_title(payload: dict) -> str:
+    return f"WebTest 测试结果：{payload['suite']}"
+
+
+def _markdown_summary(payload: dict) -> str:
+    return (
+        f"### {_notification_title(payload)}\n\n"
+        f"- 总数：{payload['total']}\n"
+        f"- 通过：{payload['passed']}\n"
+        f"- 失败：{payload['failed']}"
+    )
+
+
+def _plain_summary(payload: dict) -> str:
+    return f"总数：{payload['total']}，通过：{payload['passed']}，失败：{payload['failed']}"
