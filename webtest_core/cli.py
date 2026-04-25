@@ -178,3 +178,48 @@ def _run_deploy_if_needed(args, config: RuntimeConfig, suite) -> SuiteResult | N
                 passed_cases=0,
                 failed_cases=len(cases),
                 case_results=cases,
+            )
+    return None
+
+
+def _notification_channels(config: RuntimeConfig) -> list[NotificationChannel]:
+    channels = []
+    for channel in config.notifications.channels:
+        sender = None
+        if channel.smtp is not None:
+            sender = EmailSender(**channel.smtp.model_dump())
+        elif channel.type == "dingtalk" and channel.webhook:
+            sender = DingtalkSender(channel.webhook)
+        elif channel.type == "feishu" and channel.webhook:
+            sender = FeishuSender(channel.webhook)
+        elif channel.webhook:
+            sender = WebhookSender(channel.webhook)
+        channels.append(
+            NotificationChannel(
+                type=channel.type,
+                enabled=channel.enabled,
+                trigger=channel.trigger,
+                retries=channel.retries,
+                sender=sender,
+            )
+        )
+    return channels
+
+
+def _values(values: list[str] | None) -> set[str] | None:
+    if not values:
+        return None
+    parsed = set()
+    for value in values:
+        parsed.update(part.strip() for part in value.split(",") if part.strip())
+    return parsed
+
+
+class _DryRunActions:
+    """dry-run 时使用的浏览器动作替身，不会真正启动 Selenium。"""
+
+    def __getattr__(self, _name: str):
+        def noop(*_args, **_kwargs):
+            return None
+
+        return noop
