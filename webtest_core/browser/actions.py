@@ -178,3 +178,23 @@ class BrowserSessionActions:
     def switch_browser(self, alias: str):
         if alias not in self._sessions:
             raise ValueError(f"Unknown browser alias: {alias}")
+        self._current_alias = alias
+
+    def close_browser(self):
+        if self._current_alias in self._sessions:
+            self._sessions.pop(self._current_alias).close_browser()
+        if self._sessions:
+            self._current_alias = next(iter(self._sessions))
+
+    def close_all(self):
+        for actions in list(self._sessions.values()):
+            actions.close_browser()
+        self._sessions.clear()
+
+    def _actions(self) -> BrowserActions:
+        if self._current_alias not in self._sessions:
+            self.new_browser(self._current_alias)
+        return self._sessions[self._current_alias]
+
+    def __getattr__(self, name: str):
+        return getattr(self._actions(), name)
