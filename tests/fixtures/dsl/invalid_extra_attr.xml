@@ -1,8 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<suite name="SmokeSuite" owner="qa-team">
-  <case name="Login success">
-    <step keyword="Open">
-      <arg value="https://example.test/login" />
-    </step>
-  </case>
-</suite>
