@@ -1,9 +1,0 @@
-name: SmokeSuite
-cases:
-  - name: Broken
-    steps:
-      - action: open
-        target: https://example.test/login
-      - action: click
-        target: id=submit
-    tags: [smoke, login

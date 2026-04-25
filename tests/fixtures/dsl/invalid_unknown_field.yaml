@@ -1,9 +1,0 @@
-name: SmokeSuite
-cases:
-- name: Login success
-  tags: smoke,login
-  unexpected: true
-  steps:
-  - keyword: Open
-    args:
-    - https://example.test/login
