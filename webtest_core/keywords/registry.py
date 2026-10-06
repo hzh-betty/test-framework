@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 from webtest_core.dsl.errors import DslValidationError
+from webtest_core.redaction import Redactor
 
 
 def normalize_keyword_name(name: str) -> str:
@@ -76,11 +77,14 @@ class KeywordRegistry:
         except KeyError as exc:
             raise DslValidationError(f"Unknown keyword: {name}") from exc
 
-    def bind(self, name: str, args: list[object], kwargs: dict[str, object]) -> inspect.BoundArguments:
+    def bind(self, name: str, args: list[object], kwargs: dict[str, object], *,
+             redactor: Redactor | None = None) -> inspect.BoundArguments:
         definition = self.get(name)
         try:
             bound = definition.signature.bind(*args, **kwargs)
             bound.apply_defaults()
+            if redactor is not None:
+                redactor.collect({"keyword": definition.name, "kwargs": bound.arguments})
             if definition.validator:
                 definition.validator(definition.name, bound.arguments)
             return bound
