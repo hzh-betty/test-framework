@@ -10,11 +10,49 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from webtest_core.dsl.errors import DslValidationError
 from webtest_core.dsl.models import RuntimeConfig, SuiteSpec
 from webtest_core.dsl.variables import VARIABLE_PATTERN
+
+
+_BOOL_ADAPTER = TypeAdapter(bool)
+
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    def __init__(self, stream):
+        super().__init__(stream)
+        self._checked_mappings = set()
+
+    def flatten_mapping(self, node):
+        # 检查原始声明，允许合并键引入的默认值被显式键覆盖。
+        if node not in self._checked_mappings:
+            self._checked_mappings.add(node)
+            keys = {}
+            merge_mark = None
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    first_mark = merge_mark
+                    merge_mark = key_node.start_mark
+                else:
+                    if key_node.tag == "tag:yaml.org,2002:value":
+                        key_node.tag = "tag:yaml.org,2002:str"
+                    key = self.construct_object(key_node)
+                    try:
+                        first_mark = keys.get(key)
+                        keys[key] = key_node.start_mark
+                    except TypeError as exc:
+                        raise yaml.constructor.ConstructorError(
+                            "while constructing a mapping", node.start_mark,
+                            "found unhashable key", key_node.start_mark,
+                        ) from exc
+                if first_mark is not None:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping", first_mark,
+                        "found duplicate key", key_node.start_mark,
+                    )
+        super().flatten_mapping(node)
 
 
 def load_suite(path: str | Path) -> SuiteSpec:
@@ -48,9 +86,9 @@ def load_runtime_config(path: str | Path | None = None) -> RuntimeConfig:
 
 def _load_yaml_mapping(path: Path) -> dict:
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        payload = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeySafeLoader)
     except (yaml.YAMLError, OSError) as exc:
-        raise DslValidationError(f"Invalid YAML: {exc}") from exc
+        raise DslValidationError(f"Invalid YAML {path}: {exc}") from exc
     if payload is None:
         payload = {}
     if not isinstance(payload, dict):
@@ -69,9 +107,14 @@ def _expand_env(value: object, location: str = "config", required: bool = True) 
     if isinstance(value, list):
         return [_expand_env(item, f"{location}.{index}", required) for index, item in enumerate(value)]
     if isinstance(value, dict):
-        if location.startswith("config.notifications.channels.") and "enabled" in value:
+        if location.rsplit(".", 1)[0] == "config.notifications.channels" and "enabled" in value:
             enabled = _expand_env(value["enabled"], f"{location}.enabled", required)
-            if enabled is False or (isinstance(enabled, str) and enabled.casefold() in {"false", "0", "no", "off"}):
+            try:
+                enabled = _BOOL_ADAPTER.validate_python(enabled)
+            except ValidationError as exc:
+                raise DslValidationError(_format_validation_error(exc, prefix=f"{location}.enabled")) from exc
+            value = {**value, "enabled": enabled}
+            if not enabled:
                 required = False
         return {key: _expand_env(item, f"{location}.{key}", required) for key, item in value.items()}
     return value
@@ -81,5 +124,6 @@ def _format_validation_error(exc: ValidationError, *, prefix: str) -> str:
     errors = []
     for error in exc.errors():
         location = ".".join(str(part) for part in error["loc"])
-        errors.append(f"{prefix}.{location}: {error['msg']}")
+        location = f"{prefix}.{location}" if location else prefix
+        errors.append(f"{location}: {error['msg']}")
     return "; ".join(errors)
