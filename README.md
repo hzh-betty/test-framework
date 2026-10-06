@@ -48,7 +48,7 @@ webtest run <suite.yaml> [options]
 - `--priority p0`：按优先级筛选。
 - `--owner qa-web`：按负责人筛选。
 - `--rerun-failed <run-directory>/case-results.json`：按当前套件身份重跑失败或未执行的用例；历史生命周期失败时重跑该套件所有用例。
-- `--merge-results file1.json,file2.json`：以套件名和用例名合并，同一身份后文件覆盖。
+- `--merge-results file1.json,file2.json`：以稳定套件和用例标识合并，同一身份后文件覆盖；显示名称脱敏不影响身份。
 - `--output-dir artifacts`：指定产物根目录；运行结果写入 `runs/<run-id>/`。
 - `--html-report` / `--no-html-report`：覆盖配置中的 HTML 报告开关。
 - `--allure` / `--no-allure`：覆盖配置中的 Allure 输出开关。
@@ -61,6 +61,9 @@ webtest run <suite.yaml> [options]
 字段。测试套件以 `suite` 为根节点，包含 `name`、可选的 `variables`、`setup`、
 `teardown`、可复用 `keywords` 和 `cases`。每个用例可以声明模块、类型、优先级、
 负责人、标签、重试和步骤。
+
+套件和配置中的重复 YAML 键会报告行列并拒绝加载；合并键 `<<` 引入的默认值允许
+显式覆盖。
 
 ```yaml
 suite:
@@ -132,6 +135,8 @@ executor = SuiteExecutor(registry_factory)
 kwargs 中的授权、Cookie、password、token 等键会脱敏。Type Text 的密码定位器会
 自动脱敏文本；其他敏感位置参数使用 `sensitive_args: [0]` 声明。原值仍传给动作，
 结果、日志、错误与 DSL 附件使用脱敏副本。
+变量别名和 case 覆盖按插值后的实际值收集；数字敏感参数也会屏蔽，统计计数和时间保持原值。
+直接调用报告或通知 API 时，可传 `redactor=executor.redactor` 复用执行时收集的秘密。
 
 ## 示例
 
@@ -165,6 +170,8 @@ HTTP 片段示例：
 定位器支持严格前缀：`id`、`name`、`css`、`xpath`、`class`、`tag`、`link`、
 `partial_link`、`text`、`partial_text`、`testid`、`data-testid`。没有前缀时默认
 按 CSS 选择器处理。JSON 字段路径使用点号读取对象和数组，例如 `data.items.0.name`。
+`text` / `partial_text` 选择最内层匹配节点，支持嵌套标签文字；CSS 属性选择器中的等号
+无需添加前缀。JSON 断言区分布尔值和数字，`1` 与 `1.0` 同属数字；HTTP timeout 必须大于零。
 
 | 分类 | 关键字 | 功能简述 |
 | --- | --- | --- |
@@ -212,6 +219,13 @@ HTTP 片段示例：
 用例的 `attempts` 保存每次尝试；步骤 `retry_trace` 保存自身重试，复合步骤的
 `children` 保存子步骤。suite setup 或部署失败的用例标为 `blocked`，不计入执行失败数。
 CLI 依据整体 passed 返回 0/1，生命周期失败不会因零用例而被忽略。
+中断返回 130，`latest-run.json` 标记 `interrupted`，保留已完成用例并尽力写出报告。
+结果中的 `suite_id` / `case_id` 从原始套件名和用例名生成稳定 SHA256，供合并和失败重跑使用；
+`start` / `stop` 记录实际毫秒时间。读取历史结果会拒绝成功状态与最终步骤、尝试或子步骤的矛盾。
+直接调用 `read_failed_case_names` 可传 `case_names` 提供当前用例名，恢复已脱敏显示名称。
+
+CLI 将相对截图路径保存到本次运行的 `cases/<id>/attempt-<n>/` 或 `suite/` 下，拒绝向上逃逸；
+绝对路径按用户声明使用。HTML 和 Allure 复制 PNG 附件并关联到步骤。
 
 开启 `--allure` 后会生成 `executor-summary.json`、`environment.properties` 和
 Allure case result JSON，附件复制到本次结果目录；开启 `--html-report` 后会生成中文 HTML 报告。
@@ -226,6 +240,7 @@ Allure case result JSON，附件复制到本次结果目录；开启 `--html-rep
 触发条件使用套件整体状态，包含初始化、清理和部署失败。通知失败会打印并写入
 `notification_errors`，不改变测试本身的退出码。SMTP 默认超时 10 秒，部署默认超时
 300 秒。启用渠道必须有对应配置，缺失环境变量会报路径；禁用渠道允许缺失凭证。
+SMTP 部分拒收会记录错误并停止该条消息重试，避免给已收件的地址重复发送。
 
 | 类型 | 配置字段 | 发送格式 |
 | --- | --- | --- |
@@ -287,3 +302,15 @@ CLI 开关优先于 reports/headless 配置。logging.file 的相对路径基于
 绝对路径按配置使用。部署 commands 使用参数数组，直接启动程序；需要 shell 时显式
 声明 `cmd /c` 或 `bash -c` 及其参数。默认隐式等待为 0；配置非零值时，显式等待期间会暂时关闭它并
 在结束后恢复，避免影响短等待时间。
+部署超时或中断会回收所监督的进程树：Windows 使用 Job Object，POSIX 使用进程组。
+
+## 开发验证
+
+```bash
+uv run pytest -q
+uv build
+```
+
+GitHub Actions 在 Ubuntu 和 Windows、Python 3.11 和 3.13 上执行锁定依赖测试、构建及
+wheel 安装后的示例 dry-run。测试使用本地服务与替身，不发送真实通知或启动浏览器；
+实际 XPath 节点语义测试需要 PowerShell/.NET，缺少该环境时会跳过。
