@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from webtest_core.browser import parse_locator
+from webtest_core.browser.actions import _validate_target
 from webtest_core.keywords import keyword
 from webtest_core.dsl.durations import seconds
 
@@ -31,8 +32,7 @@ class WebKeywordLibrary:
             arguments["timeout"] = seconds(arguments["timeout"], self.default_timeout)
         if name in {"Switch Frame", "Switch Window"}:
             target = arguments["target"]
-            if isinstance(target, bool) or not isinstance(target, (str, int)) or (isinstance(target, int) and target < 0):
-                raise ValueError("target must be a string or non-negative integer")
+            _validate_target(target)
             if name == "Switch Frame" and isinstance(target, str) and target not in {"default", "parent"} and not target.isdigit():
                 parse_locator(target)
 

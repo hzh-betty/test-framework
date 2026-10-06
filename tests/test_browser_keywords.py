@@ -46,8 +46,8 @@ class FakeActions:
 def test_parse_locator_supports_strict_prefixes_and_default_css():
     assert parse_locator("id=username") == Locator(by="id", value="username")
     assert parse_locator("css=.submit") == Locator(by="css selector", value=".submit")
-    assert parse_locator("text=登录") == Locator(by="xpath", value="//*[normalize-space(.)='登录']")
-    assert parse_locator("partial_text=登录") == Locator(by="xpath", value="//*[contains(normalize-space(.), '登录')]")
+    assert parse_locator("text=登录") == Locator(by="xpath", value="//*[normalize-space(.)='登录' and not(descendant::*[normalize-space(.)='登录'])]")
+    assert parse_locator("partial_text=登录") == Locator(by="xpath", value="//*[contains(normalize-space(.), '登录') and not(descendant::*[contains(normalize-space(.), '登录')])]")
     assert parse_locator("testid=submit") == Locator(by="css selector", value="[data-testid='submit']")
     assert parse_locator("data-testid=submit") == Locator(by="css selector", value="[data-testid='submit']")
     assert parse_locator(".default") == Locator(by="css selector", value=".default")

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from selenium.webdriver.common.by import By
 
@@ -34,13 +35,15 @@ def parse_locator(raw: str) -> Locator:
 
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("locator must be a non-empty string")
-    if "=" not in raw:
+    if not re.match(r"[A-Za-z_][A-Za-z0-9_-]*=", raw):
         return Locator(By.CSS_SELECTOR, raw)
     prefix, value = raw.split("=", 1)
     if prefix == "text":
-        return Locator(By.XPATH, f"//*[normalize-space(.)={_xpath_literal(value)}]")
+        predicate = f"normalize-space(.)={_xpath_literal(value)}"
+        return Locator(By.XPATH, f"//*[{predicate} and not(descendant::*[{predicate}])]")
     if prefix == "partial_text":
-        return Locator(By.XPATH, f"//*[contains(normalize-space(.), {_xpath_literal(value)})]")
+        predicate = f"contains(normalize-space(.), {_xpath_literal(value)})"
+        return Locator(By.XPATH, f"//*[{predicate} and not(descendant::*[{predicate}])]")
     if prefix in {"testid", "data-testid"}:
         return Locator(By.CSS_SELECTOR, f"[data-testid={_css_string(value)}]")
     if prefix not in LOCATOR_STRATEGIES:

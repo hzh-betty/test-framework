@@ -37,14 +37,15 @@ class UrllibHttpClient:
     """基于标准库 urllib 的 HTTP 客户端，避免为基础能力引入额外依赖。"""
 
     def request(self, method: str, url: str, *, headers=None, timeout=10, data=None, json=None) -> HttpResponse:
-        options = _request_options({"headers": headers, "timeout": timeout, "data": data, "json": json})
+        options = _request_options({"headers": headers, "timeout": timeout, "data": data, "json": json}, validate_json=False)
         headers = dict(options["headers"] or {})
         timeout = options["timeout"]
         data = options["data"]
         json_payload = options["json"]
         if json_payload is not None:
-            data = json_module.dumps(json_payload, ensure_ascii=False).encode("utf-8")
-            headers.setdefault("Content-Type", "application/json")
+            data = json_module.dumps(json_payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            if not any(name.lower() == "content-type" for name in headers):
+                headers["Content-Type"] = "application/json"
         elif isinstance(data, str):
             data = data.encode("utf-8")
 
@@ -92,7 +93,7 @@ class HttpKeywordLibrary:
     @keyword("HTTP Request")
     def http_request(self, method: str, url: str, **kwargs):
         self.last_response = None
-        self.last_response = self.client.request(method.upper(), url, **_request_options(kwargs))
+        self.last_response = self.client.request(method.upper(), url, **_request_options(kwargs, validate_json=False))
 
     @keyword("HTTP GET")
     def http_get(self, url: str, **kwargs):
@@ -138,7 +139,7 @@ class HttpKeywordLibrary:
             actual = _read_json_path(response.json(), path)
         except (KeyError, IndexError, ValueError, TypeError) as exc:
             raise AssertionError(f"响应 JSON 字段不存在或无法读取：{path}") from exc
-        if actual != expected_value:
+        if not _json_equal(actual, expected_value):
             raise AssertionError(
                 f"响应 JSON 字段断言失败：{path} 期望 {expected_value!r}，实际 {actual!r}"
             )
@@ -153,6 +154,20 @@ class HttpKeywordLibrary:
         if self.last_response is None:
             raise AssertionError("还没有 HTTP 响应，请先执行 HTTP 请求关键字。")
         return self.last_response
+
+
+def _json_equal(actual: object, expected: object) -> bool:
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return type(actual) is type(expected) and actual == expected
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            _json_equal(actual[key], expected[key]) for key in actual
+        )
+    if isinstance(actual, list) and isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _json_equal(left, right) for left, right in zip(actual, expected)
+        )
+    return actual == expected
 
 
 def _read_json_path(payload: object, path: str) -> object:
@@ -177,13 +192,15 @@ def _charset(content_type: str | None) -> str:
     return "utf-8"
 
 
-def _request_options(kwargs: dict) -> dict:
+def _request_options(kwargs: dict, *, validate_json: bool = True) -> dict:
     unknown = set(kwargs) - {"headers", "timeout", "data", "json"}
     if unknown:
         raise ValueError(f"Unknown HTTP options: {', '.join(sorted(unknown))}")
     options = dict(kwargs)
     if "timeout" in options:
         options["timeout"] = seconds(options["timeout"])
+        if options["timeout"] <= 0:
+            raise ValueError("HTTP timeout must be greater than zero")
     headers = options.get("headers")
     if headers is not None and (not isinstance(headers, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in headers.items())):
         raise ValueError("headers must be a mapping of strings")
@@ -191,6 +208,6 @@ def _request_options(kwargs: dict) -> dict:
         raise ValueError("data must be text or bytes; use json for structured bodies")
     if options.get("data") is not None and options.get("json") is not None:
         raise ValueError("data and json cannot both be supplied")
-    if options.get("json") is not None:
+    if validate_json and options.get("json") is not None:
         json_module.dumps(options["json"], allow_nan=False)
     return options
