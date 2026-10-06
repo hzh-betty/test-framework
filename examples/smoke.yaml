@@ -30,12 +30,6 @@ suite:
       - keyword: Click
         args: [testid=login-submit]
 
-  setup:
-    - keyword: New Browser
-      args: [main]
-    - keyword: Switch Browser
-      args: [main]
-
   cases:
     - name: Web UI 关键字能力展示
       module: web
@@ -46,6 +40,10 @@ suite:
       retry: 1
       continue_on_failure: true
       setup:
+        - keyword: New Browser
+          args: [main]
+        - keyword: Switch Browser
+          args: [main]
         - keyword: 打开登录页
       steps:
         - keyword: 填写登录表单
@@ -90,6 +88,7 @@ suite:
       teardown:
         - keyword: Screenshot
           args: [artifacts/demo-ui-teardown.png]
+        - keyword: Close Browser
 
     - name: HTTP API 关键字能力展示
       module: api
@@ -127,6 +126,3 @@ suite:
           kwargs:
             headers:
               Authorization: Bearer ${api_token}
-
-  teardown:
-    - keyword: Close Browser

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from html import escape
 from pathlib import Path
+from dataclasses import asdict
 
+from webtest_core.redaction import Redactor
 from webtest_core.runtime import CaseResult, SuiteResult
 
 
@@ -16,13 +18,14 @@ def write_html_report(output_dir: str | Path, result: SuiteResult, statistics: d
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     path = output / "index.html"
-    path.write_text(_render_html(result, statistics), encoding="utf-8")
+    path.write_text(Redactor(asdict(result)).redact(_render_html(result, statistics)), encoding="utf-8")
     return path
 
 
 def _render_html(result: SuiteResult, statistics: dict) -> str:
     case_rows = "\n".join(_render_case(case) for case in result.case_results)
     overall = statistics["overall"]
+    lifecycle_rows = "".join(_render_lifecycle(item) for item in result.suite_results or [result])
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -52,9 +55,12 @@ def _render_html(result: SuiteResult, statistics: dict) -> str:
       <div class="metric"><span>用例总数</span><strong>{overall["total"]}</strong></div>
       <div class="metric"><span>通过</span><strong class="passed">{overall["passed"]}</strong></div>
       <div class="metric"><span>失败</span><strong class="failed">{overall["failed"]}</strong></div>
+      <div class="metric"><span>未执行</span><strong>{overall["blocked"]}</strong></div>
       <div class="metric"><span>通过率</span><strong>{overall["pass_rate"]}%</strong></div>
     </div>
+    <section><h2>运行状态：{'通过' if result.passed else '失败'}</h2>{lifecycle_rows}</section>
     <section><h2>用例</h2>{case_rows or '<p>没有执行任何用例。</p>'}</section>
+    <section><h2>通知</h2><p>{escape('; '.join(result.notification_errors))}</p></section>
   </main>
 </body>
 </html>
@@ -63,14 +69,24 @@ def _render_html(result: SuiteResult, statistics: dict) -> str:
 
 def _render_case(case: CaseResult) -> str:
     status_class = "passed" if case.passed else "failed"
-    status_label = "通过" if case.passed else "失败"
-    steps = "".join(
-        f"<tr><td>{escape(step.keyword)}</td><td class=\"{'passed' if step.passed else 'failed'}\">{'通过' if step.passed else '失败'}</td><td>{escape(step.error_message or '')}</td></tr>"
-        for step in case.step_results
-    )
+    status_label = "未执行" if case.blocked else ("通过" if case.passed else "失败")
+    steps = _render_steps(case.step_results)
+    history = "".join(f"<details><summary>尝试 {attempt.attempt}：{'通过' if attempt.passed else '失败'}</summary><table>{_render_steps(attempt.steps)}</table></details>" for attempt in case.attempts[:-1])
     return (
         f"<article><h3>{escape(case.name)} <span class=\"{status_class}\">{status_label}</span></h3>"
         f"<p class=\"meta\">模块={escape(case.module or '未分配')} 负责人={escape(case.owner or '未分配')}</p>"
         f"<p class=\"failed\">{escape(case.error_message or '')}</p>"
-        f"<table><tr><th>步骤</th><th>状态</th><th>错误信息</th></tr>{steps}</table></article>"
+        f"<table><tr><th>步骤</th><th>状态</th><th>错误信息</th></tr>{steps}</table>{history}</article>"
     )
+
+
+def _render_steps(steps):
+    return "".join(
+        f"<tr><td>{escape(' → '.join(step.call_chain) or step.keyword)}</td><td class=\"{'passed' if step.passed else 'failed'}\">{'通过' if step.passed else '失败'}</td><td>{escape(step.error_message or '')}</td></tr>{_render_steps(step.children)}"
+        for step in steps)
+
+
+def _render_lifecycle(result):
+    return (f"<article><h3>{escape(result.name)}</h3><p class=\"failed\">{escape(result.error_message or '')}</p>"
+            f"<h4>初始化</h4><table>{_render_steps(result.setup_steps)}</table>"
+            f"<h4>清理</h4><table>{_render_steps(result.teardown_steps)}</table></article>")

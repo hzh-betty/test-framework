@@ -67,9 +67,8 @@ suite:
         encoding="utf-8",
     )
     library = DemoKeywords()
-    registry = KeywordRegistry.from_libraries([library])
 
-    result = SuiteExecutor(registry=registry).run_suite(load_suite(suite_file))
+    result = SuiteExecutor(registry_factory=lambda: KeywordRegistry.from_libraries([library])).run_suite(load_suite(suite_file))
 
     assert result.total_cases == 2
     assert result.passed_cases == 1
@@ -103,9 +102,8 @@ suite:
         encoding="utf-8",
     )
     library = DemoKeywords()
-    registry = KeywordRegistry.from_libraries([library])
 
-    result = SuiteExecutor(registry=registry, dry_run=True).run_suite(
+    result = SuiteExecutor(registry_factory=lambda: KeywordRegistry.from_libraries([library]), dry_run=True).run_suite(
         load_suite(suite_file),
         include_tag_expr="smoke",
         modules={"auth"},
@@ -132,9 +130,10 @@ suite:
         encoding="utf-8",
     )
 
-    result = SuiteExecutor(registry=KeywordRegistry()).run_suite(load_suite(suite_file))
+    result = SuiteExecutor(registry_factory=KeywordRegistry).run_suite(load_suite(suite_file))
 
-    assert result.failed_cases == 1
+    assert result.blocked_cases == 1
+    assert result.failure_type == "validation"
     assert result.case_results[0].failure_type == "validation"
     assert "Does Not Exist" in result.case_results[0].error_message
 
@@ -156,9 +155,8 @@ suite:
         encoding="utf-8",
     )
     library = DemoKeywords()
-    registry = KeywordRegistry.from_libraries([library])
 
-    result = SuiteExecutor(registry=registry).run_suite(load_suite(suite_file))
+    result = SuiteExecutor(registry_factory=lambda: KeywordRegistry.from_libraries([library])).run_suite(load_suite(suite_file))
 
     assert result.passed_cases == 1
     case = result.case_results[0]
@@ -166,5 +164,6 @@ suite:
     assert case.step_results[0].case_attempt == 2
     assert case.step_results[0].case_max_retries == 1
     assert case.step_results[0].duration_ms >= 0
-    assert case.step_results[0].retry_trace[0]["status"] == "failed"
+    assert len(case.attempts) == 2
+    assert case.attempts[0].passed is False
     assert library.case_flaky_attempts == 2

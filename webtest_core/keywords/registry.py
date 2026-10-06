@@ -11,6 +11,7 @@ import inspect
 import re
 from dataclasses import dataclass
 from typing import Callable
+from webtest_core.dsl.errors import DslValidationError
 
 
 def normalize_keyword_name(name: str) -> str:
@@ -33,32 +34,38 @@ def keyword(name: str):
 class KeywordDefinition:
     name: str
     func: Callable
+    signature: inspect.Signature
+    validator: Callable | None = None
 
 
 class KeywordRegistry:
     """保存关键字定义，并在调用前执行 Python 参数绑定。"""
 
-    def __init__(self):
+    def __init__(self, *, diagnostics: Callable | None = None, cleanup: Callable | None = None):
         self._keywords: dict[str, KeywordDefinition] = {}
+        self.diagnostics = diagnostics
+        self.cleanup = cleanup
 
     @classmethod
-    def from_libraries(cls, libraries: list[object]):
-        registry = cls()
+    def from_libraries(cls, libraries: list[object], **kwargs):
+        registry = cls(**kwargs)
         for library in libraries:
             registry.register_library(library)
         return registry
 
-    def register(self, name: str, func: Callable) -> None:
+    def register(self, name: str, func: Callable, *, validator: Callable | None = None) -> None:
         normalized = normalize_keyword_name(name)
         if normalized in self._keywords:
             raise ValueError(f"Duplicate keyword: {name}")
-        self._keywords[normalized] = KeywordDefinition(name=name, func=func)
+        if not normalized:
+            raise DslValidationError("keyword name must not be blank")
+        self._keywords[normalized] = KeywordDefinition(name, func, inspect.signature(func), validator)
 
     def register_library(self, library: object) -> None:
         for _, member in inspect.getmembers(library, predicate=callable):
             name = getattr(member, "__webtest_keyword__", None)
             if name:
-                self.register(name, member)
+                self.register(name, member, validator=getattr(library, "validate_call", None))
 
     def has(self, name: str) -> bool:
         return normalize_keyword_name(name) in self._keywords
@@ -67,7 +74,18 @@ class KeywordRegistry:
         try:
             return self._keywords[normalize_keyword_name(name)]
         except KeyError as exc:
-            raise KeyError(f"Unknown keyword: {name}") from exc
+            raise DslValidationError(f"Unknown keyword: {name}") from exc
+
+    def bind(self, name: str, args: list[object], kwargs: dict[str, object]) -> inspect.BoundArguments:
+        definition = self.get(name)
+        try:
+            bound = definition.signature.bind(*args, **kwargs)
+            bound.apply_defaults()
+            if definition.validator:
+                definition.validator(definition.name, bound.arguments)
+            return bound
+        except (TypeError, ValueError) as exc:
+            raise DslValidationError(f"{name}: {exc}") from exc
 
     def run(
         self,
@@ -76,5 +94,5 @@ class KeywordRegistry:
         kwargs: dict[str, object] | None = None,
     ) -> object:
         definition = self.get(name)
-        bound = inspect.signature(definition.func).bind(*(args or []), **(kwargs or {}))
+        bound = self.bind(name, args or [], kwargs or {})
         return definition.func(*bound.args, **bound.kwargs)

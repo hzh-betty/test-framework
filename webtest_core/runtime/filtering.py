@@ -1,57 +1,84 @@
-"""用例筛选逻辑。
+"""筛选表达式在遍历用例前解析一次；语法错误不能当作不匹配。"""
 
-筛选独立于执行器，便于 CLI、重跑失败和未来的预览命令复用同一套规则。
-"""
-
-from __future__ import annotations
-
-from webtest_core.dsl import CaseSpec
+from webtest_core.dsl import CaseSpec, DslValidationError
 
 
-def select_cases(
-    cases: list[CaseSpec],
-    *,
-    include_tag_expr: str | None = None,
-    exclude_tag_expr: str | None = None,
-    modules: set[str] | None = None,
-    case_types: set[str] | None = None,
-    priorities: set[str] | None = None,
-    owners: set[str] | None = None,
-    allowed_case_names: set[str] | None = None,
-) -> list[CaseSpec]:
+def parse_tag_expression(expression: str | None):
+    if expression is None:
+        return None
+    tokens = expression.replace("(", " ( ").replace(")", " ) ").casefold().split()
+    position = 0
+
+    def take(token):
+        nonlocal position
+        if position < len(tokens) and tokens[position] == token:
+            position += 1
+            return True
+        return False
+
+    def atom():
+        nonlocal position
+        if take("not"):
+            return ("not", atom())
+        if take("("):
+            node = disjunction()
+            if not take(")"):
+                raise DslValidationError("Tag expression requires a closing parenthesis")
+            return node
+        if position >= len(tokens) or tokens[position] in {"and", "or", ")"}:
+            raise DslValidationError("Tag expression requires a tag")
+        tag = tokens[position]
+        position += 1
+        return ("tag", tag)
+
+    def conjunction():
+        node = atom()
+        while take("and"):
+            node = ("and", node, atom())
+        return node
+
+    def disjunction():
+        node = conjunction()
+        while take("or"):
+            node = ("or", node, conjunction())
+        return node
+
+    node = disjunction()
+    if position != len(tokens):
+        raise DslValidationError(f"Unexpected tag expression token: {tokens[position]}")
+    return node
+
+
+def matches(tags: list[str], node) -> bool:
+    tag_set = {tag.casefold() for tag in tags}
+
+    def evaluate(node):
+        operator, *operands = node
+        if operator == "tag":
+            return operands[0] in tag_set
+        if operator == "not":
+            return not evaluate(operands[0])
+        if operator == "and":
+            return evaluate(operands[0]) and evaluate(operands[1])
+        return evaluate(operands[0]) or evaluate(operands[1])
+
+    return evaluate(node)
+
+
+def select_cases(cases: list[CaseSpec], *, include_tag_expr=None, exclude_tag_expr=None,
+                 modules=None, case_types=None, priorities=None, owners=None, allowed_case_names=None) -> list[CaseSpec]:
+    include = parse_tag_expression(include_tag_expr)
+    exclude = parse_tag_expression(exclude_tag_expr)
     selected = []
     for case in cases:
         if allowed_case_names is not None and case.name not in allowed_case_names:
             continue
-        if modules is not None and (case.module or "") not in modules:
+        if any(values is not None and (getattr(case, field) or "") not in values
+               for field, values in (("module", modules), ("type", case_types), ("priority", priorities), ("owner", owners))):
             continue
-        if case_types is not None and (case.type or "") not in case_types:
+        if include is not None and not matches(case.tags, include):
             continue
-        if priorities is not None and (case.priority or "") not in priorities:
-            continue
-        if owners is not None and (case.owner or "") not in owners:
-            continue
-        if include_tag_expr and not _matches_tag_expression(case.tags, include_tag_expr):
-            continue
-        if exclude_tag_expr and _matches_tag_expression(case.tags, exclude_tag_expr):
+        if exclude is not None and matches(case.tags, exclude):
             continue
         selected.append(case)
     return selected
-
-
-def _matches_tag_expression(tags: list[str], expression: str) -> bool:
-    """执行一个小型 AND/OR/NOT 标签表达式。"""
-
-    tokens = expression.replace("(", " ( ").replace(")", " ) ").split()
-    tag_set = {tag.casefold() for tag in tags}
-    python_tokens = []
-    for token in tokens:
-        lowered = token.casefold()
-        if lowered in {"and", "or", "not", "(", ")"}:
-            python_tokens.append(lowered)
-        else:
-            python_tokens.append(str(lowered in tag_set))
-    try:
-        return bool(eval(" ".join(python_tokens), {"__builtins__": {}}, {}))
-    except Exception:
-        return False

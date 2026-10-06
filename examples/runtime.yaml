@@ -1,18 +1,18 @@
 browser: chrome
 headless: true
 timeouts:
-  implicit_wait: 5
+  implicit_wait: 0
   explicit_wait: 10
 logging:
   level: INFO
-  file: artifacts/runtime.log
+  file: runtime.log
 reports:
   html: true
   allure: false
 pipeline:
   deploy:
     commands:
-      - python -c "print('部署占位命令')"
+      - [python, "-c", "print('部署占位命令')"]
 notifications:
   channels:
     - type: email

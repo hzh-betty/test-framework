@@ -8,32 +8,33 @@ from __future__ import annotations
 
 from webtest_core.browser import parse_locator
 from webtest_core.keywords import keyword
+from webtest_core.dsl.durations import seconds
 
 
-def _seconds(value: str | int | float | None, default: int = 10) -> int | float:
-    if value is None:
-        return default
-    if isinstance(value, (int, float)):
-        return value
-    text = value.strip().lower()
-    if text.endswith("ms"):
-        return float(text[:-2].strip()) / 1000
-    if text.endswith("s"):
-        return float(text[:-1].strip())
-    if text.endswith("minute"):
-        return float(text[: -len("minute")].strip()) * 60
-    if text.endswith("minutes"):
-        return float(text[: -len("minutes")].strip()) * 60
-    if text.endswith("min"):
-        return float(text[: -len("min")].strip()) * 60
-    return float(text)
+_seconds = seconds
 
 
 class WebKeywordLibrary:
     """基于 Selenium 浏览器动作的默认关键字库。"""
 
-    def __init__(self, actions):
+    def __init__(self, actions, *, default_timeout: float = 10):
         self.actions = actions
+        self.default_timeout = default_timeout
+
+    def validate_call(self, name: str, arguments: dict) -> None:
+        for parameter in ("url", "text", "fragment", "alias", "path"):
+            if parameter in arguments and not isinstance(arguments[parameter], str):
+                raise ValueError(f"{parameter} must be a string")
+        if "locator" in arguments:
+            parse_locator(arguments["locator"])
+        if "timeout" in arguments:
+            arguments["timeout"] = seconds(arguments["timeout"], self.default_timeout)
+        if name in {"Switch Frame", "Switch Window"}:
+            target = arguments["target"]
+            if isinstance(target, bool) or not isinstance(target, (str, int)) or (isinstance(target, int) and target < 0):
+                raise ValueError("target must be a string or non-negative integer")
+            if name == "Switch Frame" and isinstance(target, str) and target not in {"default", "parent"} and not target.isdigit():
+                parse_locator(target)
 
     @keyword("Open")
     def open(self, url: str):
@@ -65,27 +66,27 @@ class WebKeywordLibrary:
 
     @keyword("Wait Visible")
     def wait_visible(self, locator: str, timeout: str | int | float | None = None):
-        self.actions.wait_visible(parse_locator(locator), _seconds(timeout))
+        self.actions.wait_visible(parse_locator(locator), seconds(timeout, self.default_timeout))
 
     @keyword("Wait Clickable")
     def wait_clickable(self, locator: str, timeout: str | int | float | None = None):
-        self.actions.wait_clickable(parse_locator(locator), _seconds(timeout))
+        self.actions.wait_clickable(parse_locator(locator), seconds(timeout, self.default_timeout))
 
     @keyword("Wait Not Visible")
     def wait_not_visible(self, locator: str, timeout: str | int | float | None = None):
-        self.actions.wait_not_visible(parse_locator(locator), _seconds(timeout))
+        self.actions.wait_not_visible(parse_locator(locator), seconds(timeout, self.default_timeout))
 
     @keyword("Wait Gone")
     def wait_gone(self, locator: str, timeout: str | int | float | None = None):
-        self.actions.wait_not_visible(parse_locator(locator), _seconds(timeout))
+        self.actions.wait_not_visible(parse_locator(locator), seconds(timeout, self.default_timeout))
 
     @keyword("Wait Text")
     def wait_text(self, locator: str, text: str, timeout: str | int | float | None = None):
-        self.actions.wait_text(parse_locator(locator), text, _seconds(timeout))
+        self.actions.wait_text(parse_locator(locator), text, seconds(timeout, self.default_timeout))
 
     @keyword("Wait URL Contains")
     def wait_url_contains(self, fragment: str, timeout: str | int | float | None = None):
-        self.actions.wait_url_contains(fragment, _seconds(timeout))
+        self.actions.wait_url_contains(fragment, seconds(timeout, self.default_timeout))
 
     @keyword("Assert Element Visible")
     def assert_element_visible(self, locator: str):
@@ -112,11 +113,11 @@ class WebKeywordLibrary:
         self.actions.hover(parse_locator(locator))
 
     @keyword("Switch Frame")
-    def switch_frame(self, target: str):
+    def switch_frame(self, target: str | int):
         self.actions.switch_frame(target)
 
     @keyword("Switch Window")
-    def switch_window(self, target: str):
+    def switch_window(self, target: str | int):
         self.actions.switch_window(target)
 
     @keyword("Accept Alert")

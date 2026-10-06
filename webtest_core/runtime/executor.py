@@ -1,357 +1,273 @@
-"""测试套件执行器。
+"""套件生命周期与每次用例尝试使用独立注册表，预检查先于执行。"""
 
-执行器接收已经校验过的 ``SuiteSpec``，并通过 ``KeywordRegistry`` 调用关键字。
-重试、失败继续、dry-run、并行和 suite/case 生命周期都集中在这里，避免报告
-或 CLI 重复理解执行语义。
-"""
-
-from __future__ import annotations
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import time
+from typing import Callable
 
-from webtest_core.dsl import CaseSpec, Scalar, StepSpec, SuiteSpec, interpolate
-from webtest_core.keywords import KeywordRegistry
+from webtest_core.browser.locators import parse_locator
+from webtest_core.dsl import CaseSpec, DslValidationError, StepSpec, SuiteSpec, interpolate
+from webtest_core.dsl.durations import seconds
+from webtest_core.keywords import KeywordRegistry, normalize_keyword_name
+from webtest_core.redaction import Redactor, sensitive_key
 from webtest_core.runtime.filtering import select_cases
-from webtest_core.runtime.models import CaseResult, FailureType, StepResult, SuiteResult
+from webtest_core.runtime.models import CaseAttempt, CaseResult, StepResult, SuiteResult
+
+
+@dataclass
+class _Context:
+    registry: KeywordRegistry
+    redactor: Redactor
 
 
 class SuiteExecutor:
-    """使用关键字注册表执行一个测试套件。"""
-
-    def __init__(self, registry: KeywordRegistry, *, dry_run: bool = False):
-        self.registry = registry
+    def __init__(self, registry_factory: Callable[[], KeywordRegistry], *, dry_run: bool = False):
+        self.registry_factory = registry_factory
         self.dry_run = dry_run
 
-    def run_suite(
-        self,
-        suite: SuiteSpec,
-        *,
-        include_tag_expr: str | None = None,
-        exclude_tag_expr: str | None = None,
-        modules: set[str] | None = None,
-        case_types: set[str] | None = None,
-        priorities: set[str] | None = None,
-        owners: set[str] | None = None,
-        allowed_case_names: set[str] | None = None,
-        workers: int = 1,
-        run_empty_suite: bool = True,
-    ) -> SuiteResult:
-        selected_cases = select_cases(
-            suite.cases,
-            include_tag_expr=include_tag_expr,
-            exclude_tag_expr=exclude_tag_expr,
-            modules=modules,
-            case_types=case_types,
-            priorities=priorities,
-            owners=owners,
-            allowed_case_names=allowed_case_names,
-        )
-        if not selected_cases and not run_empty_suite:
-            raise ValueError("Suite contains no runnable cases after filtering.")
+    def _context(self, suite, secrets=()) -> _Context:
+        redactor = Redactor(suite.model_dump())
+        redactor.secrets.update(secrets)
+        return _Context(self.registry_factory(), redactor)
 
-        suite_variables = dict(suite.variables)
-        setup_steps: list[StepResult] = []
-        setup_ok = self._run_steps(
-            suite.setup,
-            suite_variables,
-            suite.keywords,
-            setup_steps,
-            case_attempt=1,
-            case_max_retries=0,
-        )
+    def validate_suite(self, suite: SuiteSpec, cases: list[CaseSpec] | None = None):
+        """无动作的预检查；工厂必须创建新的库对象，不能预先启动浏览器。"""
+        context = self._context(suite)
+        try:
+            keywords = {}
+            for name, steps in suite.keywords.items():
+                normalized = normalize_keyword_name(name)
+                if not normalized or normalized in keywords or context.registry.has(name):
+                    raise DslValidationError(f"Duplicate or reserved composite keyword: {name}")
+                keywords[normalized] = steps
 
-        if not setup_ok:
-            case_results = [
-                CaseResult(
-                    name=case.name,
-                    passed=False,
-                    error_message="Suite setup failed.",
-                    failure_type="action",
-                    module=case.module,
-                    type=case.type,
-                    priority=case.priority,
-                    owner=case.owner,
-                    tags=list(case.tags),
-                )
-                for case in selected_cases
-            ]
-        elif workers > 1 and len(selected_cases) > 1:
-            case_results = self._run_parallel(suite, selected_cases, workers)
-        else:
-            case_results = [self._run_case(suite, case) for case in selected_cases]
+            def check_cycle(name, active):
+                if name in active:
+                    raise DslValidationError("Composite keyword cycle: " + " -> ".join([*active, name]))
+                for step in keywords[name]:
+                    child = normalize_keyword_name(step.keyword)
+                    if child in keywords:
+                        check_cycle(child, [*active, name])
+                    elif not context.registry.has(step.keyword):
+                        raise DslValidationError(f"Unknown keyword: {step.keyword}")
 
-        teardown_steps: list[StepResult] = []
-        teardown_ok = self._run_steps(
-            suite.teardown,
-            suite_variables,
-            suite.keywords,
-            teardown_steps,
-            case_attempt=1,
-            case_max_retries=0,
-        )
-        if not teardown_ok:
-            case_results.append(
-                CaseResult(
-                    name=f"{suite.name}::suite_teardown",
-                    passed=False,
-                    step_results=teardown_steps,
-                    error_message=_first_error(teardown_steps),
-                    failure_type=_first_failure_type(teardown_steps),
-                )
-            )
+            for name in keywords:
+                check_cycle(name, [])
 
-        passed = sum(1 for case in case_results if case.passed)
-        failed = len(case_results) - passed
-        return SuiteResult(
-            name=suite.name,
-            total_cases=len(case_results),
-            passed_cases=passed,
-            failed_cases=failed,
-            case_results=case_results,
-            suite_teardown_failed=not teardown_ok,
-            suite_teardown_error_message=_first_error(teardown_steps) if not teardown_ok else None,
-            suite_teardown_failure_type=_first_failure_type(teardown_steps) if not teardown_ok else None,
-        )
+            def check_steps(steps, variables, chain=()):
+                for step in steps:
+                    current = (*chain, step.keyword)
+                    try:
+                        args, kwargs, bound = self._prepare(step, variables, context, keywords)
+                        normalized = normalize_keyword_name(step.keyword)
+                        if normalized in keywords:
+                            check_steps(keywords[normalized], variables, current)
+                    except DslValidationError as exc:
+                        raise DslValidationError(" -> ".join(current) + ": " + str(exc)) from exc
 
-    def _run_parallel(self, suite: SuiteSpec, cases: list[CaseSpec], workers: int) -> list[CaseResult]:
-        ordered: list[CaseResult | None] = [None] * len(cases)
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(self._run_case, suite, case): index
-                for index, case in enumerate(cases)
-            }
-            for future in as_completed(futures):
-                ordered[futures[future]] = future.result()
-        return [case for case in ordered if case is not None]
+            check_steps(suite.setup + suite.teardown, suite.variables)
+            for case in suite.cases if cases is None else cases:
+                check_steps(case.setup + case.steps + case.teardown, {**suite.variables, **case.variables}, (case.name,))
+            return keywords, frozenset(context.redactor.secrets)
+        finally:
+            if context.registry.cleanup:
+                context.registry.cleanup()
 
-    def _run_case(self, suite: SuiteSpec, case: CaseSpec) -> CaseResult:
-        case_trace: list[dict[str, object]] = []
-        final_result: CaseResult | None = None
+    def run_suite(self, suite: SuiteSpec, *, include_tag_expr=None, exclude_tag_expr=None,
+                  modules=None, case_types=None, priorities=None, owners=None,
+                  allowed_case_names=None, workers: int = 1, run_empty_suite: bool = False) -> SuiteResult:
+        result = SuiteResult(suite.name)
+        selected = suite.cases
+        context = None
+        try:
+            if workers < 1:
+                raise DslValidationError("workers must be at least 1")
+            selected = select_cases(suite.cases, include_tag_expr=include_tag_expr, exclude_tag_expr=exclude_tag_expr,
+                                    modules=modules, case_types=case_types, priorities=priorities,
+                                    owners=owners, allowed_case_names=allowed_case_names)
+            if not selected and not run_empty_suite:
+                raise DslValidationError("Suite contains no runnable cases after filtering.")
+            keywords, secrets = self.validate_suite(suite, selected)
+            context = self._context(suite, secrets)
+            setup_ok = self._run_steps(suite.setup, suite.variables, keywords, result.setup_steps, context)
+            if not setup_ok:
+                result.case_results = [self._case_result(suite, case, passed=False, blocked=True,
+                    error_message=_first_error(result.setup_steps), failure_type=_first_failure_type(result.setup_steps)) for case in selected]
+            elif workers > 1 and len(selected) > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    # map 保持 DSL 顺序；每个任务只拥有自己的注册表和资源。
+                    result.case_results = list(pool.map(lambda case: self._run_case(suite, case, keywords, secrets), selected))
+            else:
+                result.case_results = [self._run_case(suite, case, keywords, secrets) for case in selected]
+        except Exception as exc:
+            redactor = context.redactor if context else Redactor(suite.model_dump())
+            result.error_message = redactor.redact(str(exc))
+            result.failure_type = _classify_failure(exc)
+            if not result.case_results:
+                result.case_results = [self._case_result(suite, case, passed=False, blocked=True,
+                    error_message=result.error_message, failure_type=result.failure_type) for case in selected]
+        finally:
+            if context is not None:
+                try:
+                    self._run_steps(suite.teardown, suite.variables, keywords, result.teardown_steps, context, continue_on_failure=True)
+                finally:
+                    self._close(context, result.teardown_steps)
+        return result
+
+    def _case_result(self, suite, case, **kwargs):
+        return CaseResult(name=case.name, suite=suite.name, module=case.module, type=case.type,
+                          priority=case.priority, owner=case.owner, tags=list(case.tags), **kwargs)
+
+    def _run_case(self, suite, case, keywords, secrets):
+        history = []
         for attempt in range(1, case.retry + 2):
-            final_result = self._run_case_once(suite, case, attempt)
-            for step in final_result.step_results:
-                step.case_attempt = attempt
-                step.case_max_retries = case.retry
-            if final_result.passed:
-                if case_trace and final_result.step_results:
-                    final_result.step_results[0].retry_trace = [*case_trace]
-                return final_result
-            case_trace.append(
-                {
-                    "attempt": attempt,
-                    "status": "failed",
-                    "error": final_result.error_message or "case failed",
-                }
-            )
-            if attempt > case.retry:
+            steps = []
+            context = None
+            variables = {**suite.variables, **case.variables}
+            try:
+                context = self._context(suite, secrets)
+                setup_ok = self._run_steps(case.setup, variables, keywords, steps, context,
+                                           case_attempt=attempt, case_max_retries=case.retry)
+                if setup_ok:
+                    self._run_steps(case.steps, variables, keywords, steps, context,
+                                    continue_on_failure=case.continue_on_failure,
+                                    case_attempt=attempt, case_max_retries=case.retry)
+            except Exception as exc:
+                redactor = context.redactor if context else Redactor(suite.variables, case.variables)
+                steps.append(StepResult("Execution", False, error_message=redactor.redact(str(exc)),
+                                        failure_type=_classify_failure(exc), case_attempt=attempt, case_max_retries=case.retry))
+            finally:
+                if context is not None:
+                    try:
+                        self._run_steps(case.teardown, variables, keywords, steps, context, continue_on_failure=True,
+                                        case_attempt=attempt, case_max_retries=case.retry)
+                    finally:
+                        self._close(context, steps, attempt, case.retry)
+            passed = all(step.passed for step in steps)
+            history.append(CaseAttempt(attempt, passed, steps, _first_error(steps), _first_failure_type(steps)))
+            if passed:
                 break
-        if final_result and case_trace:
-            for step in final_result.step_results:
-                step.retry_trace = [*case_trace]
-        return final_result or CaseResult(name=case.name, passed=False)
+        final = history[-1]
+        return self._case_result(suite, case, passed=final.passed, step_results=final.steps,
+            error_message=final.error_message, failure_type=final.failure_type, attempts=history)
 
-    def _run_case_once(self, suite: SuiteSpec, case: CaseSpec, case_attempt: int) -> CaseResult:
-        variables = {**suite.variables, **case.variables}
-        step_results: list[StepResult] = []
-        passed = self._run_steps(
-            case.setup,
-            variables,
-            suite.keywords,
-            step_results,
-            case_attempt=case_attempt,
-            case_max_retries=case.retry,
-        )
-        if passed:
-            passed = self._run_steps(
-                case.steps,
-                variables,
-                suite.keywords,
-                step_results,
-                continue_on_failure=case.continue_on_failure,
-                case_attempt=case_attempt,
-                case_max_retries=case.retry,
-            )
-        teardown_passed = self._run_steps(
-            case.teardown,
-            variables,
-            suite.keywords,
-            step_results,
-            case_attempt=case_attempt,
-            case_max_retries=case.retry,
-        )
-        passed = passed and teardown_passed
-        return CaseResult(
-            name=case.name,
-            passed=passed,
-            step_results=step_results,
-            error_message=None if passed else _first_error(step_results),
-            failure_type=None if passed else _first_failure_type(step_results),
-            module=case.module,
-            type=case.type,
-            priority=case.priority,
-            owner=case.owner,
-            tags=list(case.tags),
-        )
+    def _close(self, context, steps, case_attempt=1, case_max_retries=0):
+        if not context.registry.cleanup:
+            return
+        try:
+            context.registry.cleanup()
+        except Exception as exc:
+            steps.append(StepResult("Close Resources", False, error_message=context.redactor.redact(str(exc)),
+                failure_type="action", case_attempt=case_attempt, case_max_retries=case_max_retries))
 
-    def _run_steps(
-        self,
-        steps: list[StepSpec],
-        variables: dict[str, Scalar],
-        user_keywords: dict[str, list[StepSpec]],
-        step_results: list[StepResult],
-        *,
-        continue_on_failure: bool = False,
-        call_chain: list[str] | None = None,
-        case_attempt: int = 1,
-        case_max_retries: int = 0,
-    ) -> bool:
+    def _prepare(self, step, variables, context, keywords):
+        try:
+            args = interpolate(step.args, variables)
+            kwargs = interpolate(step.kwargs, variables)
+            context.redactor.collect(kwargs)
+            for index in step.sensitive_args:
+                if index >= len(args):
+                    raise DslValidationError("sensitive_args index is outside args")
+                context.redactor.add(args[index])
+            if normalize_keyword_name(step.keyword) in keywords:
+                if args or kwargs or step.timeout is not None or step.sensitive_args:
+                    raise DslValidationError("Composite keywords do not accept args, kwargs or timeout")
+                return args, kwargs, None
+            if step.timeout is not None:
+                if "timeout" in kwargs:
+                    raise DslValidationError("timeout must be supplied only once")
+                kwargs["timeout"] = seconds(interpolate(step.timeout, variables))
+            bound = context.registry.bind(step.keyword, args, kwargs)
+            context.redactor.collect(bound.arguments)
+            if normalize_keyword_name(step.keyword) == "type text" and sensitive_key(str(bound.arguments.get("locator", ""))):
+                context.redactor.add(bound.arguments.get("text"))
+            if "timeout" in bound.arguments:
+                kwargs["timeout"] = bound.arguments["timeout"]
+            elif "kwargs" in bound.arguments:
+                kwargs = bound.arguments["kwargs"]
+            return args, kwargs, bound
+        except (TypeError, ValueError) as exc:
+            if isinstance(exc, DslValidationError):
+                raise
+            raise DslValidationError(str(exc)) from exc
+
+    def _run_steps(self, steps, variables, keywords, results, context, *, continue_on_failure=False,
+                   call_chain=(), case_attempt=1, case_max_retries=0):
         passed = True
         for step in steps:
-            current_chain = [*(call_chain or []), step.keyword]
-            if step.keyword in user_keywords:
-                nested_ok = self._run_steps(
-                    user_keywords[step.keyword],
-                    variables,
-                    user_keywords,
-                    step_results,
-                    continue_on_failure=continue_on_failure or step.continue_on_failure,
-                    call_chain=current_chain,
-                    case_attempt=case_attempt,
-                    case_max_retries=case_max_retries,
-                )
-                passed = passed and nested_ok
-                if not nested_ok and not (continue_on_failure or step.continue_on_failure):
-                    return False
-                continue
-
-            result = self._run_step(
-                step,
-                variables,
-                call_chain=current_chain,
-                case_attempt=case_attempt,
-                case_max_retries=case_max_retries,
-            )
-            step_results.append(result)
+            chain = (*call_chain, step.keyword)
+            result = self._run_step(step, variables, keywords, context, chain,
+                                    case_attempt, case_max_retries, continue_on_failure)
+            results.append(result)
             if not result.passed:
                 passed = False
                 if not (continue_on_failure or step.continue_on_failure):
-                    return False
+                    break
         return passed
 
-    def _run_step(
-        self,
-        step: StepSpec,
-        variables: dict[str, Scalar],
-        *,
-        call_chain: list[str],
-        case_attempt: int,
-        case_max_retries: int,
-    ) -> StepResult:
-        args = interpolate(step.args, variables)
-        kwargs = interpolate(step.kwargs, variables)
-        if step.timeout is not None and "timeout" not in kwargs:
-            kwargs = {**kwargs, "timeout": interpolate(step.timeout, variables)}
-        max_retries = step.retry
-        retry_trace: list[dict[str, object]] = []
-        for attempt in range(1, max_retries + 2):
-            started = time.perf_counter()
+    def _run_step(self, step, variables, keywords, context, chain, case_attempt, case_max_retries, continue_on_failure):
+        result = StepResult(step.keyword, False, dry_run=self.dry_run, call_chain=list(chain),
+                            retry_max_retries=step.retry, case_attempt=case_attempt, case_max_retries=case_max_retries)
+        started = time.perf_counter()
+        try:
+            args, kwargs, bound = self._prepare(step, variables, context, keywords)
+            result.arguments = context.redactor.redact(args)
+            result.kwargs = context.redactor.redact(kwargs)
+        except Exception as exc:
+            result.error_message = context.redactor.redact(str(exc))
+            result.failure_type = _classify_failure(exc)
+            return result
+        for attempt in range(1, step.retry + 2):
+            result.retry_attempt = attempt
+            result.children = []
+            attempt_started = time.perf_counter()
             try:
-                if not self.registry.has(step.keyword):
-                    raise KeyError(f"Unknown keyword: {step.keyword}")
-                if not self.dry_run:
-                    self.registry.run(step.keyword, list(args), dict(kwargs))
-                duration_ms = int((time.perf_counter() - started) * 1000)
-                return StepResult(
-                    keyword=step.keyword,
-                    passed=True,
-                    arguments=list(args),
-                    kwargs=dict(kwargs),
-                    dry_run=self.dry_run,
-                    call_chain=list(call_chain),
-                    duration_ms=duration_ms,
-                    retry_attempt=attempt,
-                    retry_max_retries=max_retries,
-                    case_attempt=case_attempt,
-                    case_max_retries=case_max_retries,
-                    retry_trace=[*retry_trace],
-                    resolved_locator=_resolved_locator(args),
-                    current_url=_current_url(self.registry),
-                )
-            # 关键字库可能抛出任意异常；执行器必须把它们转换成结构化结果，
-            # 否则报告、通知和重跑失败都无法获得稳定的数据。
+                normalized = normalize_keyword_name(step.keyword)
+                if normalized in keywords:
+                    result.passed = self._run_steps(keywords[normalized], variables, keywords, result.children, context,
+                        continue_on_failure=continue_on_failure or step.continue_on_failure, call_chain=chain,
+                        case_attempt=case_attempt, case_max_retries=case_max_retries)
+                    result.error_message = _first_error(result.children)
+                    result.failure_type = _first_failure_type(result.children)
+                else:
+                    if not self.dry_run:
+                        definition = context.registry.get(step.keyword)
+                        definition.func(*bound.args, **bound.kwargs)
+                    result.passed = True
+                    result.error_message = result.failure_type = None
             except Exception as exc:
-                duration_ms = int((time.perf_counter() - started) * 1000)
-                failure_type = _classify_failure(exc)
-                if attempt <= max_retries:
-                    retry_trace.append(
-                        {
-                            "attempt": attempt,
-                            "status": "failed",
-                            "error": str(exc),
-                        }
-                    )
-                    continue
-                return StepResult(
-                    keyword=step.keyword,
-                    passed=False,
-                    arguments=list(args),
-                    kwargs=dict(kwargs),
-                    dry_run=self.dry_run,
-                    error_message=str(exc),
-                    failure_type=failure_type,
-                    call_chain=list(call_chain),
-                    duration_ms=duration_ms,
-                    retry_attempt=attempt,
-                    retry_max_retries=max_retries,
-                    case_attempt=case_attempt,
-                    case_max_retries=case_max_retries,
-                    retry_trace=[*retry_trace],
-                    resolved_locator=_resolved_locator(args),
-                    current_url=_current_url(self.registry),
-                )
+                result.error_message = context.redactor.redact(str(exc))
+                result.failure_type = _classify_failure(exc)
+            if result.passed:
+                break
+            result.retry_trace.append({"attempt": attempt, "status": "failed", "error": result.error_message,
+                "duration_ms": int((time.perf_counter() - attempt_started) * 1000),
+                "children": [child.to_dict() for child in result.children]})
+        result.duration_ms = int((time.perf_counter() - started) * 1000)
+        # 诊断不能影响动作结果或触发重试。
+        try:
+            if bound is not None and "locator" in bound.arguments:
+                raw = bound.arguments["locator"]
+                locator = parse_locator(raw)
+                result.resolved_locator = context.redactor.redact({"raw": raw, "by": locator.by, "value": locator.value})
+            if context.registry.diagnostics:
+                result.current_url = context.redactor.redact(context.registry.diagnostics().get("current_url"))
+        except Exception as exc:
+            result.diagnostic_error = context.redactor.redact(str(exc))
+        return result
 
 
-def _classify_failure(exc: Exception) -> FailureType:
-    if isinstance(exc, KeyError):
+def _classify_failure(exc):
+    if isinstance(exc, DslValidationError):
         return "validation"
     if isinstance(exc, AssertionError):
         return "assertion"
     return "action"
 
 
-def _first_error(steps: list[StepResult]) -> str | None:
-    for step in steps:
-        if not step.passed:
-            return step.error_message
-    return None
+def _first_error(steps):
+    return next((step.error_message for step in steps if not step.passed), None)
 
 
-def _first_failure_type(steps: list[StepResult]) -> FailureType | None:
-    for step in steps:
-        if not step.passed:
-            return step.failure_type
-    return None
-
-
-def _resolved_locator(args: object) -> dict[str, str] | None:
-    if not isinstance(args, list) or not args or not isinstance(args[0], str):
-        return None
-    raw = args[0]
-    if raw.startswith(("http://", "https://", "/")):
-        return None
-    if "=" in raw:
-        by, value = raw.split("=", 1)
-    else:
-        by, value = "css", raw
-    return {"raw": raw, "by": by, "value": value}
-
-
-def _current_url(registry: KeywordRegistry) -> str | None:
-    for definition in getattr(registry, "_keywords", {}).values():
-        actions = getattr(getattr(definition.func, "__self__", None), "actions", None)
-        driver = getattr(actions, "driver", None)
-        current_url = getattr(driver, "current_url", None)
-        if isinstance(current_url, str):
-            return current_url
-    return None
+def _first_failure_type(steps):
+    return next((step.failure_type for step in steps if not step.passed), None)

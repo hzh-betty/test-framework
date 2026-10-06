@@ -26,6 +26,8 @@ def load_suite(path: str | Path) -> SuiteSpec:
     payload = _load_yaml_mapping(source)
     if "suite" not in payload:
         raise DslValidationError("suite root key is required.")
+    if set(payload) != {"suite"}:
+        raise DslValidationError("Only the suite root key is accepted.")
     try:
         return SuiteSpec.model_validate(payload["suite"])
     except ValidationError as exc:
@@ -46,21 +48,32 @@ def load_runtime_config(path: str | Path | None = None) -> RuntimeConfig:
 
 def _load_yaml_mapping(path: Path) -> dict:
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, OSError) as exc:
         raise DslValidationError(f"Invalid YAML: {exc}") from exc
+    if payload is None:
+        payload = {}
     if not isinstance(payload, dict):
         raise DslValidationError("YAML document must be a mapping.")
     return payload
 
 
-def _expand_env(value: object) -> object:
+def _expand_env(value: object, location: str = "config", required: bool = True) -> object:
     if isinstance(value, str):
-        return VARIABLE_PATTERN.sub(lambda match: os.environ.get(match.group(1), ""), value)
+        def replace(match):
+            name = match.group(1)
+            if name not in os.environ and required:
+                raise DslValidationError(f"{location}: Missing environment variable {name}")
+            return os.environ.get(name, "")
+        return VARIABLE_PATTERN.sub(replace, value)
     if isinstance(value, list):
-        return [_expand_env(item) for item in value]
+        return [_expand_env(item, f"{location}.{index}", required) for index, item in enumerate(value)]
     if isinstance(value, dict):
-        return {key: _expand_env(item) for key, item in value.items()}
+        if location.startswith("config.notifications.channels.") and "enabled" in value:
+            enabled = _expand_env(value["enabled"], f"{location}.enabled", required)
+            if enabled is False or (isinstance(enabled, str) and enabled.casefold() in {"false", "0", "no", "off"}):
+                required = False
+        return {key: _expand_env(item, f"{location}.{key}", required) for key, item in value.items()}
     return value
 
 

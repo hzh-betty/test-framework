@@ -5,9 +5,10 @@
 
 from webtest_core.runtime.executor import SuiteExecutor
 from webtest_core.runtime.filtering import select_cases
-from webtest_core.runtime.models import CaseResult, FailureType, StepResult, SuiteResult
+from webtest_core.runtime.models import CaseAttempt, CaseResult, FailureType, StepResult, SuiteResult
 
 __all__ = [
+    "CaseAttempt",
     "CaseResult",
     "FailureType",
     "StepResult",

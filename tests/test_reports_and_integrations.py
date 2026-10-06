@@ -29,9 +29,6 @@ class MemoryNotifier:
 def _suite_result() -> SuiteResult:
     return SuiteResult(
         name="ReportSuite",
-        total_cases=2,
-        passed_cases=1,
-        failed_cases=1,
         case_results=[
             CaseResult(name="Login", passed=True, module="auth", owner="qa", tags=["smoke"]),
             CaseResult(
@@ -88,7 +85,7 @@ def test_reports_write_case_results_statistics_html_and_allure_artifacts(tmp_pat
     assert any(allure_dir.glob("*-result.json"))
     assert (allure_dir / "executor-summary.json").exists()
     assert (allure_dir / "environment.properties").exists()
-    assert read_failed_case_names(case_results) == {"Checkout"}
+    assert read_failed_case_names(case_results, suite_name="ReportSuite") == {"Checkout"}
 
 
 def test_merge_case_results_uses_later_files_as_winners(tmp_path: Path):
@@ -150,7 +147,7 @@ def test_dingtalk_sender_builds_markdown_webhook_payload():
                 "msgtype": "markdown",
                 "markdown": {
                     "title": "WebTest 测试结果：ReportSuite",
-                    "text": "### WebTest 测试结果：ReportSuite\n\n- 总数：2\n- 通过：1\n- 失败：1",
+                    "text": "### WebTest 测试结果：ReportSuite\n\n- 状态：失败\n- 总数：2\n- 通过：1\n- 失败：1\n- 未执行：0\n",
                 },
             },
         )
@@ -173,7 +170,7 @@ def test_feishu_sender_builds_post_webhook_payload():
                         "zh_cn": {
                             "title": "WebTest 测试结果：ReportSuite",
                             "content": [
-                                [{"tag": "text", "text": "总数：2，通过：1，失败：1"}],
+                                [{"tag": "text", "text": "状态：失败，总数：2，通过：1，失败：1，未执行：0。"}],
                             ],
                         }
                     }

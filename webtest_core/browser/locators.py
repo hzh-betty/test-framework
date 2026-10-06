@@ -32,6 +32,8 @@ LOCATOR_STRATEGIES = {
 def parse_locator(raw: str) -> Locator:
     """解析 ``prefix=value`` 定位器；没有前缀时默认按 CSS 处理。"""
 
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("locator must be a non-empty string")
     if "=" not in raw:
         return Locator(By.CSS_SELECTOR, raw)
     prefix, value = raw.split("=", 1)

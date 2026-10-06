@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from selenium import webdriver
 from selenium.webdriver.common.action_chains import ActionChains
@@ -20,14 +21,15 @@ from webtest_core.browser.locators import Locator, parse_locator
 class BrowserConfig:
     browser: str = "chrome"
     headless: bool = False
-    implicit_wait: int = 10
+    implicit_wait: float = 0
 
 
 class BrowserActions:
     """默认 Web 关键字使用的 Selenium 薄封装。"""
 
-    def __init__(self, driver):
+    def __init__(self, driver, *, implicit_wait: float = 0):
         self.driver = driver
+        self.implicit_wait = implicit_wait
 
     @classmethod
     def create(cls, config: BrowserConfig):
@@ -49,17 +51,15 @@ class BrowserActions:
             driver = webdriver.Edge(options=options)
         else:
             raise ValueError(f"Unsupported browser: {config.browser}")
-        driver.implicitly_wait(config.implicit_wait)
-        return cls(driver)
+        try:
+            driver.implicitly_wait(config.implicit_wait)
+        except Exception:
+            driver.quit()
+            raise
+        return cls(driver, implicit_wait=config.implicit_wait)
 
     def close_browser(self):
         self.driver.quit()
-
-    def new_browser(self, alias: str = "default"):
-        return None
-
-    def switch_browser(self, alias: str):
-        return None
 
     def open(self, url: str):
         self.driver.get(url)
@@ -81,27 +81,36 @@ class BrowserActions:
             raise AssertionError(f"Expected {text!r} to be present in {actual!r}")
 
     def wait_visible(self, locator: Locator, timeout: int | float = 10):
-        return WebDriverWait(self.driver, timeout).until(
+        return self._wait(timeout,
             EC.visibility_of_element_located((locator.by, locator.value))
         )
 
     def wait_clickable(self, locator: Locator, timeout: int | float = 10):
-        return WebDriverWait(self.driver, timeout).until(
+        return self._wait(timeout,
             EC.element_to_be_clickable((locator.by, locator.value))
         )
 
     def wait_not_visible(self, locator: Locator, timeout: int | float = 10):
-        return WebDriverWait(self.driver, timeout).until(
+        return self._wait(timeout,
             EC.invisibility_of_element_located((locator.by, locator.value))
         )
 
     def wait_text(self, locator: Locator, text: str, timeout: int | float = 10):
-        return WebDriverWait(self.driver, timeout).until(
+        return self._wait(timeout,
             EC.text_to_be_present_in_element((locator.by, locator.value), text)
         )
 
     def wait_url_contains(self, fragment: str, timeout: int | float = 10):
-        return WebDriverWait(self.driver, timeout).until(EC.url_contains(fragment))
+        return self._wait(timeout, EC.url_contains(fragment))
+
+    def _wait(self, timeout, condition):
+        if self.implicit_wait:
+            self.driver.implicitly_wait(0)
+        try:
+            return WebDriverWait(self.driver, timeout).until(condition)
+        finally:
+            if self.implicit_wait:
+                self.driver.implicitly_wait(self.implicit_wait)
 
     def assert_element_visible(self, locator: Locator):
         element = self.driver.find_element(locator.by, locator.value)
@@ -127,19 +136,23 @@ class BrowserActions:
             self.driver.find_element(locator.by, locator.value)
         ).perform()
 
-    def switch_frame(self, target: str):
+    def switch_frame(self, target: str | int):
+        _validate_target(target)
         if target == "default":
             self.driver.switch_to.default_content()
         elif target == "parent":
             self.driver.switch_to.parent_frame()
-        elif target.isdigit():
+        elif isinstance(target, int) or target.isdigit():
             self.driver.switch_to.frame(int(target))
         else:
             locator = parse_locator(target)
             self.driver.switch_to.frame(self.driver.find_element(locator.by, locator.value))
 
-    def switch_window(self, target: str):
-        if target.isdigit():
+    def switch_window(self, target: str | int):
+        _validate_target(target)
+        if isinstance(target, int) or target.isdigit():
+            if int(target) >= len(self.driver.window_handles):
+                raise ValueError(f"Window index out of range: {target}")
             self.driver.switch_to.window(self.driver.window_handles[int(target)])
         else:
             self.driver.switch_to.window(target)
@@ -151,7 +164,10 @@ class BrowserActions:
         self.driver.find_element(locator.by, locator.value).send_keys(path)
 
     def screenshot(self, path: str):
-        self.driver.save_screenshot(path)
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if not self.driver.save_screenshot(str(output)):
+            raise RuntimeError(f"Screenshot could not be saved: {output}")
 
 
 class BrowserSessionActions:
@@ -182,14 +198,31 @@ class BrowserSessionActions:
 
     def close_browser(self):
         if self._current_alias in self._sessions:
-            self._sessions.pop(self._current_alias).close_browser()
+            self._sessions[self._current_alias].close_browser()
+            del self._sessions[self._current_alias]
         if self._sessions:
             self._current_alias = next(iter(self._sessions))
 
     def close_all(self):
-        for actions in list(self._sessions.values()):
-            actions.close_browser()
+        sessions = list(self._sessions.items())
         self._sessions.clear()
+        errors = []
+        for alias, actions in sessions:
+            try:
+                actions.close_browser()
+            except Exception as exc:
+                errors.append(f"{alias}: {exc}")
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+    @property
+    def driver(self):
+        actions = self._sessions.get(self._current_alias)
+        return actions.driver if actions is not None else None
+
+    def diagnostics(self) -> dict:
+        driver = self.driver
+        return {"current_url": driver.current_url if driver is not None else None}
 
     def _actions(self) -> BrowserActions:
         if self._current_alias not in self._sessions:
@@ -197,4 +230,13 @@ class BrowserSessionActions:
         return self._sessions[self._current_alias]
 
     def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
         return getattr(self._actions(), name)
+
+
+def _validate_target(target):
+    if isinstance(target, bool) or not isinstance(target, (str, int)):
+        raise ValueError("target must be a string or non-negative integer")
+    if (isinstance(target, int) and target < 0) or (isinstance(target, str) and target.startswith("-") and target[1:].isdigit()):
+        raise ValueError("target index must be non-negative")

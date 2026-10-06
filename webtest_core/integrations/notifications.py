@@ -24,7 +24,7 @@ class NotificationSender(Protocol):
 class WebhookClient:
     """发送 JSON webhook 的最小客户端，方便通知发送器在测试中替换。"""
 
-    def post_json(self, url: str, payload: dict) -> None:
+    def post_json(self, url: str, payload: dict) -> bytes:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = request.Request(
             url,
@@ -32,7 +32,8 @@ class WebhookClient:
             method="POST",
             headers={"Content-Type": "application/json"},
         )
-        request.urlopen(req, timeout=10)
+        with request.urlopen(req, timeout=10) as response:
+            return response.read()
 
 
 class WebhookSender:
@@ -57,7 +58,7 @@ class DingtalkSender:
 
     def send(self, payload: dict) -> None:
         title = _notification_title(payload)
-        self.client.post_json(
+        response = self.client.post_json(
             self.url,
             {
                 "msgtype": "markdown",
@@ -67,6 +68,7 @@ class DingtalkSender:
                 },
             },
         )
+        _check_bot_response(response, "errcode")
 
 
 class FeishuSender:
@@ -77,7 +79,7 @@ class FeishuSender:
         self.client = client or WebhookClient()
 
     def send(self, payload: dict) -> None:
-        self.client.post_json(
+        response = self.client.post_json(
             self.url,
             {
                 "msg_type": "post",
@@ -98,6 +100,7 @@ class FeishuSender:
                 },
             },
         )
+        _check_bot_response(response, "code")
 
 
 class EmailSender:
@@ -112,6 +115,7 @@ class EmailSender:
         password: str,
         sender: str,
         receivers: list[str],
+        timeout: float = 10,
     ):
         self.host = host
         self.port = port
@@ -119,14 +123,15 @@ class EmailSender:
         self.password = password
         self.sender = sender
         self.receivers = receivers
+        self.timeout = timeout
 
     def send(self, payload: dict) -> None:
         message = EmailMessage()
-        message["Subject"] = f"WebTest {payload['suite']} failed={payload['failed']}"
+        message["Subject"] = f"WebTest {payload['suite']} success={payload.get('success', payload['failed'] == 0)} failed={payload['failed']}"
         message["From"] = self.sender
         message["To"] = ", ".join(self.receivers)
         message.set_content(str(payload))
-        with smtplib.SMTP_SSL(self.host, self.port) as client:
+        with smtplib.SMTP_SSL(self.host, self.port, timeout=self.timeout) as client:
             client.login(self.username, self.password)
             client.send_message(message)
 
@@ -151,12 +156,17 @@ class NotificationDispatcher:
             "total": result.total_cases,
             "passed": result.passed_cases,
             "failed": result.failed_cases,
+            "blocked": result.blocked_cases,
+            "success": result.passed,
+            "error_message": result.error_message or next((step.error_message for item in result.suite_results or [result]
+                for step in item.setup_steps + item.teardown_steps if not step.passed), None),
             "statistics": statistics,
         }
         for channel in self.channels:
             if not channel.enabled or not _should_send(channel.trigger, result):
                 continue
             if channel.sender is None:
+                errors.append(f"{channel.type}: enabled channel has no sender")
                 continue
             for attempt in range(channel.retries + 1):
                 try:
@@ -164,7 +174,7 @@ class NotificationDispatcher:
                     break
                 except Exception as exc:
                     if attempt >= channel.retries:
-                        errors.append(str(exc))
+                        errors.append(f"{channel.type}: {exc}")
         return errors
 
 
@@ -172,9 +182,9 @@ def _should_send(trigger: str, result: SuiteResult) -> bool:
     if trigger == "always":
         return True
     if trigger == "on_failure":
-        return result.failed_cases > 0
+        return not result.passed
     if trigger == "on_success":
-        return result.failed_cases == 0
+        return result.passed
     return False
 
 
@@ -185,11 +195,23 @@ def _notification_title(payload: dict) -> str:
 def _markdown_summary(payload: dict) -> str:
     return (
         f"### {_notification_title(payload)}\n\n"
+        f"- 状态：{'通过' if payload.get('success', payload['failed'] == 0) else '失败'}\n"
         f"- 总数：{payload['total']}\n"
         f"- 通过：{payload['passed']}\n"
-        f"- 失败：{payload['failed']}"
+        f"- 失败：{payload['failed']}\n"
+        f"- 未执行：{payload.get('blocked', 0)}\n"
+        f"{payload.get('error_message') or ''}"
     )
 
 
 def _plain_summary(payload: dict) -> str:
-    return f"总数：{payload['total']}，通过：{payload['passed']}，失败：{payload['failed']}"
+    return f"状态：{'通过' if payload.get('success', payload['failed'] == 0) else '失败'}，总数：{payload['total']}，通过：{payload['passed']}，失败：{payload['failed']}，未执行：{payload.get('blocked', 0)}。{payload.get('error_message') or ''}"
+
+
+def _check_bot_response(response, code_key):
+    if response is None:  # 支持不返回正文的自定义客户端。
+        return
+    payload = json.loads(response)
+    code = payload.get(code_key)
+    if code != 0:
+        raise RuntimeError(f"Robot rejected notification: {payload}")

@@ -13,6 +13,7 @@ from typing import Protocol
 from urllib import error, request
 
 from webtest_core.keywords import keyword
+from webtest_core.dsl.durations import seconds
 
 
 @dataclass(frozen=True)
@@ -35,11 +36,12 @@ class HttpClient(Protocol):
 class UrllibHttpClient:
     """基于标准库 urllib 的 HTTP 客户端，避免为基础能力引入额外依赖。"""
 
-    def request(self, method: str, url: str, **kwargs) -> HttpResponse:
-        headers = dict(kwargs.get("headers") or {})
-        timeout = kwargs.get("timeout", 10)
-        data = kwargs.get("data")
-        json_payload = kwargs.get("json")
+    def request(self, method: str, url: str, *, headers=None, timeout=10, data=None, json=None) -> HttpResponse:
+        options = _request_options({"headers": headers, "timeout": timeout, "data": data, "json": json})
+        headers = dict(options["headers"] or {})
+        timeout = options["timeout"]
+        data = options["data"]
+        json_payload = options["json"]
         if json_payload is not None:
             data = json_module.dumps(json_payload, ensure_ascii=False).encode("utf-8")
             headers.setdefault("Content-Type", "application/json")
@@ -56,12 +58,13 @@ class UrllibHttpClient:
                     body=body,
                 )
         except error.HTTPError as exc:
-            body = exc.read().decode(_charset(exc.headers.get("content-type")))
-            return HttpResponse(
-                status_code=exc.code,
-                headers={key.lower(): value for key, value in exc.headers.items()},
-                body=body,
-            )
+            with exc:
+                body = exc.read().decode(_charset(exc.headers.get("content-type")))
+                return HttpResponse(
+                    status_code=exc.code,
+                    headers={key.lower(): value for key, value in exc.headers.items()},
+                    body=body,
+                )
 
 
 class HttpKeywordLibrary:
@@ -71,9 +74,25 @@ class HttpKeywordLibrary:
         self.client = client or UrllibHttpClient()
         self.last_response: HttpResponse | None = None
 
+    def validate_call(self, name: str, arguments: dict) -> None:
+        if "kwargs" in arguments:
+            arguments["kwargs"] = _request_options(arguments["kwargs"])
+        if "url" in arguments and (not isinstance(arguments["url"], str) or not arguments["url"].startswith(("http://", "https://"))):
+            raise ValueError("HTTP URL must start with http:// or https://")
+        if "method" in arguments and (not isinstance(arguments["method"], str) or not arguments["method"].isalpha()):
+            raise ValueError("HTTP method must contain letters")
+        for parameter in ("path", "name", "expected_text", "expected_value"):
+            if parameter in arguments and name != "Assert Response JSON" and not isinstance(arguments[parameter], str):
+                raise ValueError(f"{parameter} must be a string")
+        if "path" in arguments and (not isinstance(arguments["path"], str) or not arguments["path"]):
+            raise ValueError("path must be a non-empty string")
+        if "expected_status" in arguments and (isinstance(arguments["expected_status"], bool) or not isinstance(arguments["expected_status"], int)):
+            raise ValueError("expected_status must be an integer")
+
     @keyword("HTTP Request")
     def http_request(self, method: str, url: str, **kwargs):
-        self.last_response = self.client.request(method.upper(), url, **kwargs)
+        self.last_response = None
+        self.last_response = self.client.request(method.upper(), url, **_request_options(kwargs))
 
     @keyword("HTTP GET")
     def http_get(self, url: str, **kwargs):
@@ -115,7 +134,10 @@ class HttpKeywordLibrary:
     @keyword("Assert Response JSON")
     def assert_response_json(self, path: str, expected_value: object):
         response = self._response()
-        actual = _read_json_path(response.json(), path)
+        try:
+            actual = _read_json_path(response.json(), path)
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
+            raise AssertionError(f"响应 JSON 字段不存在或无法读取：{path}") from exc
         if actual != expected_value:
             raise AssertionError(
                 f"响应 JSON 字段断言失败：{path} 期望 {expected_value!r}，实际 {actual!r}"
@@ -151,5 +173,24 @@ def _charset(content_type: str | None) -> str:
     for part in content_type.split(";"):
         part = part.strip()
         if part.lower().startswith("charset="):
-            return part.split("=", 1)[1]
+            return part.split("=", 1)[1].strip('"\' ')
     return "utf-8"
+
+
+def _request_options(kwargs: dict) -> dict:
+    unknown = set(kwargs) - {"headers", "timeout", "data", "json"}
+    if unknown:
+        raise ValueError(f"Unknown HTTP options: {', '.join(sorted(unknown))}")
+    options = dict(kwargs)
+    if "timeout" in options:
+        options["timeout"] = seconds(options["timeout"])
+    headers = options.get("headers")
+    if headers is not None and (not isinstance(headers, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in headers.items())):
+        raise ValueError("headers must be a mapping of strings")
+    if options.get("data") is not None and not isinstance(options["data"], (str, bytes)):
+        raise ValueError("data must be text or bytes; use json for structured bodies")
+    if options.get("data") is not None and options.get("json") is not None:
+        raise ValueError("data and json cannot both be supplied")
+    if options.get("json") is not None:
+        json_module.dumps(options["json"], allow_nan=False)
+    return options

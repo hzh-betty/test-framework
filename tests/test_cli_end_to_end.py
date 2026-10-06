@@ -43,12 +43,15 @@ suite:
     )
 
     assert exit_code == 0
+    output_dir = Path(json.loads((output_dir / "latest-run.json").read_text(encoding="utf-8"))["directory"])
     assert json.loads((output_dir / "case-results.json").read_text(encoding="utf-8"))["suite"] == "CliSmoke"
     assert (output_dir / "statistics.json").exists()
     assert "CliSmoke" in (output_dir / "html-report" / "index.html").read_text(encoding="utf-8")
 
 
-def test_cli_deploy_failure_short_circuits_execution_and_notifies(tmp_path: Path):
+def test_cli_deploy_failure_short_circuits_execution_and_notifies(tmp_path: Path, monkeypatch):
+    notifications = []
+    monkeypatch.setattr(cli.NotificationDispatcher, "send", lambda self, result, **kwargs: notifications.append(result) or [])
     suite_file = tmp_path / "smoke.yaml"
     config_file = tmp_path / "runtime.yaml"
     output_dir = tmp_path / "artifacts"
@@ -69,7 +72,7 @@ suite:
 pipeline:
   deploy:
     commands:
-      - python -c "import sys; sys.exit(7)"
+      - [python, "-c", "import sys; sys.exit(7)"]
 notifications:
   channels:
     - type: webhook
@@ -85,15 +88,20 @@ notifications:
             "--config",
             str(config_file),
             "--deploy",
+            "--notify",
             "--output-dir",
             str(output_dir),
         ]
     )
 
+    output_dir = Path(json.loads((output_dir / "latest-run.json").read_text(encoding="utf-8"))["directory"])
     payload = json.loads((output_dir / "case-results.json").read_text(encoding="utf-8"))
     assert exit_code == 1
     assert payload["cases"][0]["name"] == "Not executed"
     assert payload["cases"][0]["failure_type"] == "deploy"
+    assert payload["cases"][0]["blocked"] is True
+    assert len(notifications) == 1
+    assert notifications[0].failure_type == "deploy"
 
 
 def test_cli_supports_run_empty_suite_rerun_failed_and_allure_environment(tmp_path: Path):
@@ -114,7 +122,7 @@ suite:
         encoding="utf-8",
     )
     rerun_file.write_text(
-        json.dumps({"suite": "old", "cases": [{"name": "Other", "passed": False}]}),
+        json.dumps({"suite": "EmptySuite", "cases": [{"name": "Other", "passed": False}]}),
         encoding="utf-8",
     )
 
@@ -132,6 +140,7 @@ suite:
         ]
     )
 
+    output_dir = Path(json.loads((output_dir / "latest-run.json").read_text(encoding="utf-8"))["directory"])
     payload = json.loads((output_dir / "case-results.json").read_text(encoding="utf-8"))
     assert exit_code == 0
     assert payload["cases"] == []
