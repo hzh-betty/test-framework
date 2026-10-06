@@ -14,7 +14,10 @@ from webtest_core.runtime import CaseResult, SuiteResult
 from webtest_core.reports.io import write_json
 
 
-def build_statistics(result: SuiteResult) -> dict:
+def build_statistics(result: SuiteResult, *, redactor: Redactor | None = None) -> dict:
+    redactor = redactor or Redactor()
+    redactor.collect(asdict(result))
+    result = redactor.redact_result(result)
     stats = {"suite": result.name, "overall": _summarize(result.case_results), "passed": result.passed,
              "error_message": result.error_message, "failure_type": result.failure_type,
              "suite_setup_failed": result.suite_setup_failed, "suite_teardown_failed": result.suite_teardown_failed}
@@ -23,9 +26,23 @@ def build_statistics(result: SuiteResult) -> dict:
     return stats
 
 
-def write_statistics(path: str | Path, result: SuiteResult, *, statistics: dict | None = None) -> Path:
-    payload = statistics if statistics is not None else build_statistics(result)
-    return write_json(path, Redactor(asdict(result)).redact(payload))
+def safe_statistics(result: SuiteResult, statistics: dict | None = None, *,
+                    redactor: Redactor | None = None) -> dict:
+    """从安全结果重建框架统计，保留并脱敏调用方提供的额外字段。"""
+    redactor = redactor or Redactor()
+    redactor.collect(asdict(result))
+    framework_fields = {"suite", "overall", "passed", "error_message", "failure_type",
+                        "suite_setup_failed", "suite_teardown_failed", "module", "type", "priority", "owner", "tag"}
+    extras = {key: value for key, value in (statistics or {}).items() if key not in framework_fields}
+    redactor.collect(extras)
+    payload = redactor.redact(extras)
+    payload.update(build_statistics(result, redactor=redactor))
+    return payload
+
+
+def write_statistics(path: str | Path, result: SuiteResult, *, statistics: dict | None = None,
+                     redactor: Redactor | None = None) -> Path:
+    return write_json(path, safe_statistics(result, statistics, redactor=redactor))
 
 
 def _summarize(cases: list[CaseResult]) -> dict:

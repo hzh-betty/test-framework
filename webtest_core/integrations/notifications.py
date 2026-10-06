@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from email.message import EmailMessage
 import json
@@ -13,6 +14,8 @@ import smtplib
 from typing import Literal, Protocol
 from urllib import request
 
+from webtest_core.redaction import Redactor
+from webtest_core.reports.statistics import safe_statistics
 from webtest_core.runtime import SuiteResult
 
 
@@ -103,6 +106,10 @@ class FeishuSender:
         _check_bot_response(response, "code")
 
 
+class _PartialEmailDeliveryError(smtplib.SMTPRecipientsRefused):
+    """部分收件人已接收；再次发送会给他们重复邮件。"""
+
+
 class EmailSender:
     """邮件通知使用的 SMTP 发送器。"""
 
@@ -133,7 +140,9 @@ class EmailSender:
         message.set_content(str(payload))
         with smtplib.SMTP_SSL(self.host, self.port, timeout=self.timeout) as client:
             client.login(self.username, self.password)
-            client.send_message(message)
+            refused = client.send_message(message)
+        if refused:
+            raise _PartialEmailDeliveryError(refused)
 
 
 @dataclass
@@ -149,16 +158,25 @@ class NotificationDispatcher:
     def __init__(self, channels: list[NotificationChannel]):
         self.channels = channels
 
-    def send(self, result: SuiteResult, *, statistics: dict) -> list[str]:
+    def send(self, result: SuiteResult, *, statistics: dict,
+             redactor: Redactor | None = None) -> list[str]:
         errors: list[str] = []
+        redactor = redactor or Redactor()
+        for channel in self.channels:
+            if isinstance(channel.sender, EmailSender):
+                redactor.add(channel.sender.password)
+            elif isinstance(channel.sender, (WebhookSender, DingtalkSender, FeishuSender)):
+                redactor.collect(channel.sender.url)
+        statistics = safe_statistics(result, statistics, redactor=redactor)
+        safe_result = redactor.redact_result(result)
         payload = {
-            "suite": result.name,
+            "suite": safe_result.name,
             "total": result.total_cases,
             "passed": result.passed_cases,
             "failed": result.failed_cases,
             "blocked": result.blocked_cases,
             "success": result.passed,
-            "error_message": result.error_message or next((step.error_message for item in result.suite_results or [result]
+            "error_message": safe_result.error_message or next((step.error_message for item in safe_result.suite_results or [safe_result]
                 for step in item.setup_steps + item.teardown_steps if not step.passed), None),
             "statistics": statistics,
         }
@@ -170,12 +188,13 @@ class NotificationDispatcher:
                 continue
             for attempt in range(channel.retries + 1):
                 try:
-                    channel.sender.send(payload)
+                    channel.sender.send(deepcopy(payload))
                     break
                 except Exception as exc:
-                    if attempt >= channel.retries:
-                        errors.append(f"{channel.type}: {exc}")
-        return errors
+                    if isinstance(exc, _PartialEmailDeliveryError) or attempt >= channel.retries:
+                        errors.append(redactor.redact(f"{channel.type}: {exc}"))
+                        break
+        return redactor.redact(errors)
 
 
 def _should_send(trigger: str, result: SuiteResult) -> bool:
