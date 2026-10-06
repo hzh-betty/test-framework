@@ -15,15 +15,17 @@
 ## 快速开始
 
 ```bash
-uv sync --dev
+uv sync --dev --locked
 uv run webtest run examples/smoke.yaml --config examples/runtime.yaml --dry-run --html-report
 ```
 
-命令会生成：
+每次运行都会创建独立目录，`artifacts/latest-run.json` 的 `directory` 指向本次产物。
+该目录包含：
 
-- `artifacts/case-results.json`
-- `artifacts/statistics.json`
-- `artifacts/html-report/index.html`
+- `case-results.json`
+- `statistics.json`
+- `runtime.log`
+- `html-report/index.html`
 
 ## 命令行
 
@@ -35,21 +37,21 @@ webtest run <suite.yaml> [options]
 
 - `--config examples/runtime.yaml`：指定运行配置。
 - `--browser chrome|firefox|edge`：指定浏览器。
-- `--headless`：启用无头模式。
-- `--dry-run`：只校验和模拟执行，不启动真实浏览器。
+- `--headless` / `--no-headless`：覆盖配置中的无头模式。
+- `--dry-run`：校验名称、参数、变量、定位器、超时和复合调用图；不启动浏览器、不请求 HTTP、不部署或发送通知。
 - `--workers 4`：设置并行用例数量。
-- `--run-empty-suite`：筛选后没有可执行用例时按成功处理，并产出空结果。
+- `--run-empty-suite`：允许筛选后零用例；suite 初始化和清理失败仍返回失败。
 - `--include-tag-expr "smoke AND login"`：只执行匹配标签表达式的用例。
 - `--exclude-tag-expr "slow"`：排除匹配标签表达式的用例。
 - `--module auth`：按模块筛选。
 - `--case-type ui`：按用例类型筛选。
 - `--priority p0`：按优先级筛选。
 - `--owner qa-web`：按负责人筛选。
-- `--rerun-failed artifacts/case-results.json`：只重跑历史失败用例。
-- `--merge-results file1.json,file2.json`：合并多个结果文件。
-- `--output-dir artifacts`：指定输出目录。
-- `--html-report`：生成内置中文 HTML 测试报告。
-- `--allure`：生成 Allure 结果文件。
+- `--rerun-failed <run-directory>/case-results.json`：按当前套件身份重跑失败或未执行的用例；历史生命周期失败时重跑该套件所有用例。
+- `--merge-results file1.json,file2.json`：以套件名和用例名合并，同一身份后文件覆盖。
+- `--output-dir artifacts`：指定产物根目录；运行结果写入 `runs/<run-id>/`。
+- `--html-report` / `--no-html-report`：覆盖配置中的 HTML 报告开关。
+- `--allure` / `--no-allure`：覆盖配置中的 Allure 输出开关。
 - `--notify`：按运行配置发送通知。
 - `--deploy`：执行运行配置中的部署命令。
 
@@ -89,8 +91,47 @@ suite:
   continue_on_failure: false
 ```
 
-支持的超时单位包括 `500ms`、`2s`、`1 minute`。动作名支持 Robot 风格规范化，
+支持的超时单位包括 `500ms`、`2s`、`1 minute`、`2 minutes`。timeout 是关键字
+支持的 I/O 等待参数；不能给 Open、Click 等没有 timeout 参数的关键字声明总时间预算。
+动作名和复合关键字名支持 Robot 风格规范化，
 例如 `Wait Visible`、`wait-visible`、`wait_visible` 等价。
+
+套件内用例名必须唯一。复合关键字只声明步骤列表，不接受 args、kwargs 或 timeout；
+其 retry 会重新执行整个子流程，循环引用在执行前拒绝。`${name}` 独占一个值时保留
+数字、布尔、列表和对象类型，混合文本引用转换为字符串；变量缺失或循环引用会报错。
+
+## 生命周期与进程内 API
+
+suite setup/teardown 共用一个套件上下文，每个用例尝试使用独立的浏览器会话和
+HTTP 响应。suite setup 登录不会传递浏览器给用例；登录复合关键字应放在 case setup。
+teardown 会尝试全部步骤，自动资源清理会尝试关闭全部会话，失败均写入报告。
+
+自定义执行使用工厂，每次调用创建新的有状态库对象。工厂只组装资源，不启动浏览器：
+
+```python
+from webtest_core.browser import BrowserConfig, BrowserSessionActions
+from webtest_core.keywords import KeywordRegistry
+from webtest_core.keywords.http import HttpKeywordLibrary
+from webtest_core.keywords.web import WebKeywordLibrary
+from webtest_core.runtime import SuiteExecutor
+
+def registry_factory():
+    actions = BrowserSessionActions(BrowserConfig(headless=True))
+    return KeywordRegistry.from_libraries(
+        [WebKeywordLibrary(actions), HttpKeywordLibrary()],
+        diagnostics=actions.diagnostics,
+        cleanup=actions.close_all,
+    )
+
+executor = SuiteExecutor(registry_factory)
+```
+
+不要在工厂中返回共享的浏览器或 HttpKeywordLibrary。用于控制外部服务行为的测试
+替身可以显式共享计数器；用例执行状态必须独立。
+
+kwargs 中的授权、Cookie、password、token 等键会脱敏。Type Text 的密码定位器会
+自动脱敏文本；其他敏感位置参数使用 `sensitive_args: [0]` 声明。原值仍传给动作，
+结果、日志、错误与 DSL 附件使用脱敏副本。
 
 ## 示例
 
@@ -165,17 +206,26 @@ HTTP 片段示例：
 
 ## 报告与可观测性
 
-`case-results.json` 包含 suite teardown 状态、用例结果和步骤级诊断字段：
+`case-results.json` 包含整体 `passed`、独立的 setup/teardown 步骤、用例结果和诊断字段：
 `failure_type`、`call_chain`、`duration_ms`、`retry_attempt`、`retry_max_retries`、
 `case_attempt`、`case_max_retries`、`retry_trace`、`resolved_locator`、`current_url`。
+用例的 `attempts` 保存每次尝试；步骤 `retry_trace` 保存自身重试，复合步骤的
+`children` 保存子步骤。suite setup 或部署失败的用例标为 `blocked`，不计入执行失败数。
+CLI 依据整体 passed 返回 0/1，生命周期失败不会因零用例而被忽略。
 
 开启 `--allure` 后会生成 `executor-summary.json`、`environment.properties` 和
-Allure case result JSON；开启 `--html-report` 后会生成中文 HTML 测试报告。
+Allure case result JSON，附件复制到本次结果目录；开启 `--html-report` 后会生成中文 HTML 报告。
+直接调用 Allure 写入函数时要求空目录，避免混入旧结果。Allure 结果由框架直接生成，
+不需要 allure-python-commons，查看报告时另行使用 Allure CLI。
 
 ## 通知
 
 传入 `--notify` 后，框架会读取 `notifications.channels` 并按 `trigger`
 发送结果摘要。当前支持邮件、钉钉、飞书和通用 webhook：
+
+触发条件使用套件整体状态，包含初始化、清理和部署失败。通知失败会打印并写入
+`notification_errors`，不改变测试本身的退出码。SMTP 默认超时 10 秒，部署默认超时
+300 秒。启用渠道必须有对应配置，缺失环境变量会报路径；禁用渠道允许缺失凭证。
 
 | 类型 | 配置字段 | 发送格式 |
 | --- | --- | --- |
@@ -193,11 +243,19 @@ Allure case result JSON；开启 `--html-report` 后会生成中文 HTML 测试�
 browser: chrome
 headless: true
 timeouts:
-  implicit_wait: 5
+  implicit_wait: 0
+  explicit_wait: 10
+logging:
+  level: INFO
+  file: runtime.log
+reports:
+  html: true
+  allure: false
 pipeline:
   deploy:
+    timeout: 300
     commands:
-      - python -c "print('部署占位命令')"
+      - [python, "-c", "print('部署占位命令')"]
 notifications:
   channels:
     - type: email
@@ -224,3 +282,8 @@ notifications:
       retries: 1
       webhook: ${WEBTEST_FEISHU_WEBHOOK}
 ```
+
+CLI 开关优先于 reports/headless 配置。logging.file 的相对路径基于本次运行目录，
+绝对路径按配置使用。部署 commands 使用参数数组，直接启动程序；需要 shell 时显式
+声明 `cmd /c` 或 `bash -c` 及其参数。默认隐式等待为 0；配置非零值时，显式等待期间会暂时关闭它并
+在结束后恢复，避免影响短等待时间。
