@@ -4,4 +4,6 @@
 CLI，运行时模型是唯一受支持的进程内 API。
 """
 
-__version__ = "1.0.0"
+from importlib.metadata import version
+
+__version__ = version("webtest-core")
