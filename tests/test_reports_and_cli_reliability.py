@@ -179,7 +179,7 @@ def test_cli_cleanup_failure_writes_current_report_and_returns_failure(tmp_path,
 
 def test_cli_preflight_prevents_deployment_for_invalid_dsl(tmp_path, monkeypatch):
     suite = write_suite(tmp_path, [{"keyword": "Open"}])
-    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: pytest.fail("deployed invalid suite"))
+    monkeypatch.setattr(cli, "run_deploy_command", lambda *a, **k: pytest.fail("deployed invalid suite"))
     root = tmp_path / "out"
     assert cli.main(["run", str(suite), "--deploy", "--output-dir", str(root)]) == 1
     assert json.loads((latest(root) / "case-results.json").read_text(encoding="utf-8"))["failure_type"] == "validation"
@@ -187,7 +187,7 @@ def test_cli_preflight_prevents_deployment_for_invalid_dsl(tmp_path, monkeypatch
 
 def test_dry_run_does_not_deploy_or_notify(tmp_path, monkeypatch):
     suite = write_suite(tmp_path)
-    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: pytest.fail("dry-run deployed"))
+    monkeypatch.setattr(cli, "run_deploy_command", lambda *a, **k: pytest.fail("dry-run deployed"))
     monkeypatch.setattr(cli.NotificationDispatcher, "send", lambda *a, **k: pytest.fail("dry-run notified"))
     assert cli.main(["run", str(suite), "--dry-run", "--deploy", "--notify", "--output-dir", str(tmp_path / "out")]) == 0
 
@@ -240,7 +240,7 @@ def test_deploy_timeout_is_reported_and_empty_suite_still_fails(tmp_path, monkey
     def timed_out(*args, **kwargs):
         assert kwargs["timeout"] == 1
         raise subprocess.TimeoutExpired("fake", 1)
-    monkeypatch.setattr(cli.subprocess, "run", timed_out)
+    monkeypatch.setattr(cli, "run_deploy_command", timed_out)
     root = tmp_path / "out"
     assert cli.main(["run", str(suite), "--config", str(config), "--deploy", "--run-empty-suite", "--output-dir", str(root)]) == 1
     result = json.loads((latest(root) / "case-results.json").read_text(encoding="utf-8"))
@@ -276,7 +276,7 @@ def test_deploy_failure_dispatches_configured_webhook(tmp_path, monkeypatch):
     config = tmp_path / "config.yaml"
     config.write_text("pipeline:\n  deploy:\n    commands: [[fake]]\nnotifications:\n  channels:\n    - type: webhook\n      trigger: on_failure\n      webhook: https://local.test\n", encoding="utf-8")
     sent = []
-    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=7, stdout="", stderr="deployment failed"))
+    monkeypatch.setattr(cli, "run_deploy_command", lambda *a, **k: SimpleNamespace(returncode=7, stdout="", stderr="deployment failed"))
     monkeypatch.setattr(cli, "WebhookSender", lambda url: SimpleNamespace(send=lambda payload: sent.append(payload)))
     assert cli.main(["run", str(suite), "--config", str(config), "--deploy", "--notify", "--output-dir", str(tmp_path / "out")]) == 1
     assert len(sent) == 1 and sent[0]["success"] is False and sent[0]["blocked"] == 1

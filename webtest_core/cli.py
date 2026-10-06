@@ -22,6 +22,7 @@ from webtest_core.redaction import Redactor
 from webtest_core.reports import build_statistics, merge_case_results, read_failed_case_names, write_allure_results, write_case_results, write_html_report, write_statistics
 from webtest_core.reports.io import write_json
 from webtest_core.runtime import CaseResult, SuiteExecutor, SuiteResult, select_cases
+from webtest_core.runtime.deploy import run_deploy_command
 
 
 def _positive_int(value):
@@ -70,6 +71,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = SuiteResult(Path(args.suite).stem if args.suite else "Merged")
     redactor = Redactor()
     logger = None
+    executor = None
+    interrupted = False
     log_path = output_dir / "runtime.log"
     try:
         config = load_runtime_config(args.config)
@@ -91,9 +94,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise DslValidationError("suite path is required unless --merge-results is provided")
             suite = load_suite(args.suite)
             result.name = suite.name
-            redactor.collect(suite.model_dump())
-            allowed = read_failed_case_names(args.rerun_failed, suite_name=suite.name) if args.rerun_failed else None
-            executor = SuiteExecutor(lambda: _build_registry(args, config), dry_run=args.dry_run)
+            redactor.collect_suite(suite.model_dump())
+            allowed = read_failed_case_names(args.rerun_failed, suite_name=suite.name,
+                case_names=[case.name for case in suite.cases]) if args.rerun_failed else None
+            executor = SuiteExecutor(lambda: _build_registry(args, config), dry_run=args.dry_run,
+                                     redactor=redactor, output_dir=output_dir)
             filters = dict(include_tag_expr=args.include_tag_expr, exclude_tag_expr=args.exclude_tag_expr,
                            modules=_values(args.module), case_types=_values(args.case_type), priorities=_values(args.priority),
                            owners=_values(args.owner), allowed_case_names=allowed)
@@ -110,13 +115,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                         workers=args.workers, run_empty_suite=args.run_empty_suite)
             else:
                 result = executor.run_suite(suite, **filters, workers=args.workers, run_empty_suite=args.run_empty_suite)
+    except KeyboardInterrupt:
+        interrupted = True
+        result = getattr(executor, "last_result", result)
+        result.error_message = result.error_message or "Run interrupted"
+        result.failure_type = "action"
     except Exception as exc:
         result.error_message = redactor.redact(str(exc))
         result.failure_type = "validation" if isinstance(exc, (DslValidationError, ValueError)) else "action"
     try:
         _write_outputs(args, output_dir, result, config, redactor=redactor, logger=logger, runtime_log_path=log_path)
-        manifest["status"] = "passed" if result.passed else "failed"
-        return 0 if result.passed else 1
+        manifest["status"] = "interrupted" if interrupted else ("passed" if result.passed else "failed")
+        return 130 if interrupted else (0 if result.passed else 1)
+    except KeyboardInterrupt:
+        manifest["status"] = "interrupted"
+        return 130
     except Exception:
         manifest["status"] = "output_failed"
         raise
@@ -145,16 +158,16 @@ def _write_outputs(args, output_dir: Path, result: SuiteResult, config: RuntimeC
                    redactor: Redactor | None = None, logger=None, runtime_log_path=None) -> None:
     config = config or RuntimeConfig()
     redactor = redactor or Redactor(config.model_dump(), result.to_dict())
-    stats = build_statistics(result)
+    stats = build_statistics(result, redactor=redactor)
     # 先保存执行结果；通知及可选报告失败不会丢失本次结果。
-    write_case_results(output_dir / "case-results.json", result)
-    write_statistics(output_dir / "statistics.json", result, statistics=stats)
+    write_case_results(output_dir / "case-results.json", result, redactor=redactor)
+    write_statistics(output_dir / "statistics.json", result, statistics=stats, redactor=redactor)
     if args.notify and not args.dry_run:
-        errors = NotificationDispatcher(_notification_channels(config)).send(result, statistics=stats)
+        errors = NotificationDispatcher(_notification_channels(config)).send(result, statistics=stats, redactor=redactor)
         result.notification_errors = redactor.redact(errors)
         for error in result.notification_errors:
             print(f"Notification failed: {error}", file=sys.stderr)
-        write_case_results(output_dir / "case-results.json", result)
+        write_case_results(output_dir / "case-results.json", result, redactor=redactor)
     if logger:
         logger.info("Result: %s", redactor.redact(json.dumps(result.to_dict(), ensure_ascii=False)))
         for handler in logger.handlers:
@@ -162,7 +175,7 @@ def _write_outputs(args, output_dir: Path, result: SuiteResult, config: RuntimeC
     html_enabled = config.reports.html if args.html_report is None else args.html_report
     allure_enabled = config.reports.allure if args.allure is None else args.allure
     if html_enabled:
-        write_html_report(output_dir / "html-report", result, stats)
+        write_html_report(output_dir / "html-report", result, stats, redactor=redactor)
     if allure_enabled:
         write_allure_results(output_dir / "allure-results", result, browser=args.browser or config.browser,
             headless=config.headless if args.headless is None else args.headless,
@@ -178,8 +191,7 @@ def _run_deploy_if_needed(args, config: RuntimeConfig, suite, cases=None, redact
     for command in config.pipeline.deploy.commands:
         error = None
         try:
-            completed = subprocess.run(command, text=True, capture_output=True,
-                                       timeout=config.pipeline.deploy.timeout, errors="replace")
+            completed = run_deploy_command(command, timeout=config.pipeline.deploy.timeout)
             if completed.returncode != 0:
                 details = (completed.stderr or completed.stdout)[-4000:]
                 error = f"deploy command failed with exit code {completed.returncode}: {command}\n{details}"

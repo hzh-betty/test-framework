@@ -29,7 +29,7 @@ class Redactor:
         elif isinstance(value, (dict, list)):
             for item in (value.values() if isinstance(value, dict) else value):
                 self.add(item)
-        elif value is not None:
+        elif value is not None and not isinstance(value, str):
             self.add(str(value))
 
     def collect_suite(self, payload: dict) -> None:

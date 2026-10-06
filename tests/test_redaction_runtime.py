@@ -202,3 +202,9 @@ def test_factory_initialization_errors_keep_collected_secrets(failure_at):
     assert not result.passed
     assert secret in executor.redactor.secrets
     assert secret not in json.dumps(result.to_dict())
+
+
+def test_empty_credentials_are_ignored_without_recursion():
+    redactor = Redactor({"password": "", "api_token": None, "cookie": [""]})
+    assert redactor.secrets == set()
+    assert redactor.redact("ordinary text") == "ordinary text"
